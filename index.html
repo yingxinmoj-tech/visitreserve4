@@ -1,0 +1,3370 @@
+<!doctype html>
+<html lang="zh-TW" class="h-full">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>線上預約訪視系統</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+
+  <!-- =====================================================
+       Firebase 設定區塊
+       請將下方 firebaseConfig 換成你自己的 Firebase 專案設定
+       ===================================================== -->
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+    import { getDatabase, ref, set, get, remove, onValue, push } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+
+    // ★ 請將下方設定換成你的 Firebase 專案設定 ★
+    const firebaseConfig = {
+      apiKey: "AIzaSyCuQfuiFon0JNv7wuJdynk82VtStaPrzXk",
+      authDomain: "visitreservation-dbafe.firebaseapp.com",
+      databaseURL: "https://visitreservation-dbafe-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "visitreservation-dbafe",
+      storageBucket: "visitreservation-dbafe.firebasestorage.app",
+      messagingSenderId: "283812344092",
+      appId: "1:283812344092:web:2e499ab1cf2123a3274ad9",
+      measurementId: "G-9MCL1J098P"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const DATA_PATH = 'visitSystemData';
+
+    let __handler = null;
+
+    // 將 Firebase 資料物件（key-value）轉換為陣列
+    function fbObjToArray(obj) {
+      if (!obj) return [];
+      return Object.entries(obj).map(([key, val]) => ({ ...val, __backendId: key }));
+    }
+
+    window.dataSdk = {
+      async init(h) {
+        __handler = h;
+        // 即時監聽 Firebase 資料變更（所有人都會同步更新）
+        onValue(ref(db, DATA_PATH), (snapshot) => {
+          const arr = fbObjToArray(snapshot.val());
+          if (__handler && typeof __handler.onDataChanged === 'function') {
+            try { __handler.onDataChanged(arr); } catch(e) { console.error(e); }
+          }
+        });
+        return { isOk: true };
+      },
+
+      async query() {
+        const snapshot = await get(ref(db, DATA_PATH));
+        return { isOk: true, data: fbObjToArray(snapshot.val()) };
+      },
+
+      async create(o) {
+        // push() 會自動產生唯一 key
+        const newRef = push(ref(db, DATA_PATH));
+        const id = newRef.key;
+        o.__backendId = id;
+        await set(newRef, o);
+        return { isOk: true };
+      },
+
+      async update(o) {
+        if (!o.__backendId) return { isOk: false };
+        await set(ref(db, `${DATA_PATH}/${o.__backendId}`), o);
+        return { isOk: true };
+      },
+
+      async delete(o) {
+        if (!o.__backendId) return { isOk: false };
+        await remove(ref(db, `${DATA_PATH}/${o.__backendId}`));
+        return { isOk: true };
+      }
+    };
+
+    // 初始化通知主程式
+    document.dispatchEvent(new Event('dataSdkReady'));
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Noto Sans TC', sans-serif; }
+    html, body { height: 100%; margin: 0; }
+    body { box-sizing: border-box; }
+    .fade-in { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  </style>
+ </head>
+ <body class="h-full bg-slate-50">
+  <div id="app" class="h-full w-full overflow-auto flex flex-col">
+   <!-- Header -->
+   <div id="mainHeader" class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-40">
+    <div class="flex-1"></div><button onclick="openAdminLogin()" class="px-3 py-1.5 text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-600 rounded-lg font-medium transition-colors flex items-center gap-1"> <i data-lucide="shield" class="w-3 h-3"></i>管理員登入 </button>
+   </div><!-- Main Content -->
+   <div id="mainContent" class="flex-1 overflow-auto">
+    <!-- Admin Login Modal -->
+    <div id="adminLoginModal" class="fixed inset-0 z-50 hidden items-center justify-center" style="background:rgba(0,0,0,0.5)">
+     <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm mx-4">
+      <h2 class="text-2xl font-bold text-gray-800 mb-6">管理員登入</h2><input type="password" id="adminPassword" placeholder="請輸入密碼" class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none mb-4" onkeypress="if(event.key==='Enter')loginAdmin()">
+      <div class="flex gap-3">
+       <button type="button" onclick="closeAdminLogin()" class="flex-1 px-4 py-3 rounded-xl border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium">取消</button> <button type="button" onclick="loginAdmin()" class="flex-1 px-4 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-medium">登入</button>
+      </div>
+     </div>
+    </div><!-- Edit Modal -->
+    <div id="editModal" class="fixed inset-0 z-50 hidden items-center justify-center" style="background:rgba(0,0,0,0.5)">
+     <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md mx-4 max-h-96 overflow-y-auto">
+      <h2 class="text-2xl font-bold text-gray-800 mb-4" id="editModalTitle">編輯</h2>
+      <div id="editFormContent" class="space-y-3"></div>
+      <div class="flex gap-3 mt-6">
+       <button type="button" onclick="closeEditModal()" class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium">取消</button>
+       <button type="button" onclick="handleEditSubmit()" class="flex-1 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium">儲存</button>
+      </div>
+     </div>
+    </div><!-- Toast -->
+    <div id="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 hidden px-4 py-3 rounded-lg text-white shadow-lg"></div><!-- PAGE 1: Home -->
+    <div id="page1" class="fade-in h-full overflow-auto">
+     <div class="max-w-4xl mx-auto px-4 py-8">
+      <div class="text-center mb-8">
+       <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-teal-600 mb-4">
+        <i data-lucide="calendar-check" class="w-8 h-8 text-white"></i>
+       </div>
+       <h1 class="text-3xl font-bold text-gray-800">線上預約訪視系統</h1>
+       <p class="text-gray-500 mt-2">Visit Reservation System</p>
+      </div><!-- 區段一：預約提醒事項 -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+       <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="info" class="w-5 h-5 text-teal-600"></i>
+        <h2 class="text-lg font-semibold text-gray-800">預約提醒事項</h2>
+       </div>
+       <ol class="space-y-3 text-gray-700 text-sm">
+        <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-xs font-bold">1</span> <span>訪視申請於訪視日前 <strong>1 個月</strong>開放申請。</span></li>
+        <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-xs font-bold">2</span> <span>請於訪視日前 <strong>5 個工作天</strong>完成申請，未於時限內申請者將不予受理。</span></li>
+        <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-xs font-bold">3</span> <span>預約訪視前請先確認學生各項班別時間（已公告於雲端硬碟）以避免時間衝突。</span></li>
+        <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center text-xs font-bold">4</span> <span>如遇塞車或其他事故逾時，一定要提早來電告知。</span></li>
+        <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center text-xs font-bold">5</span> <span class="text-red-600 font-semibold">【重要】預約結果請以前一週五電子郵件通知後為主！</span></li>
+        <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center text-xs font-bold">6</span> <span class="text-red-600 font-semibold">【注意】已預約入校訪視之學生若有借提或出校等情形而無法訪視時，將標示於學號左方，請各位留意並取消或調整預約名單。</span></li>
+       </ol>
+      </div><!-- 區段二：公告事項 -->
+      <div id="announcementBox" class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+       <div class="flex items-center gap-2 mb-4">
+        <i data-lucide="bell" class="w-5 h-5 text-amber-600"></i>
+        <h2 class="text-lg font-semibold text-gray-800">公告事項</h2>
+       </div>
+       <div id="announcementContent" class="bg-amber-50 rounded-lg p-4 border-l-4 border-amber-400 min-h-20 text-gray-700 whitespace-pre-wrap">
+        暫無公告內容
+       </div>
+      </div><!-- 區段三：預約名單 (Tabs) -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-6">
+       <div class="flex border-b border-gray-200">
+        <button onclick="switchVisitTab('inschool')" class="visit-tab flex-1 py-3 px-4 font-medium text-sm border-b-2 border-teal-600 text-teal-600">入校訪視</button> <button onclick="switchVisitTab('window')" class="visit-tab flex-1 py-3 px-4 font-medium text-sm border-b-2 border-transparent text-gray-600 hover:text-gray-800">窗口接見</button>
+       </div>
+       <div class="p-6">
+        <div id="scheduleContainer" class="space-y-3">
+         <p class="text-center text-gray-400 py-8">載入中...</p>
+        </div>
+       </div>
+      </div><!-- 開始預約按鈕 --> <button type="button" onclick="startBooking()" class="w-full py-3.5 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 text-lg"> <i data-lucide="check-circle" class="w-5 h-5"></i>我已詳閱，開始預約 </button>
+     </div>
+    </div><!-- PAGE 2: Fill Information -->
+    <div id="page2" class="fade-in hidden h-full overflow-auto">
+     <div class="max-w-2xl mx-auto px-4 py-8">
+      <button onclick="goToPage('page1')" class="flex items-center gap-1 text-gray-500 hover:text-gray-700 mb-6 font-medium"> <i data-lucide="arrow-left" class="w-5 h-5"></i>返回 </button>
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-8">
+       <h2 class="text-2xl font-bold text-gray-800 mb-2">填寫預約資訊</h2>
+       <p class="text-gray-500 text-sm mb-6">請填寫以下基本資料</p>
+       <div id="infoForm" class="space-y-4">
+        <div>
+         <label class="block text-sm font-medium text-gray-700 mb-2">訪視單位 <span class="text-red-500">*</span></label> <input type="text" id="formUnit" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none" placeholder="例：社團法人...">
+        </div>
+        <div>
+         <label class="block text-sm font-medium text-gray-700 mb-2">訪視社工姓名 <span class="text-red-500">*</span></label> <input type="text" id="formWorker" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none" placeholder="例：王美麗">
+        </div>
+        <div>
+         <label class="block text-sm font-medium text-gray-700 mb-2">訪視學生學號 <span class="text-red-500">*</span></label> <input type="text" id="formStudentId" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none" placeholder="例：112001">
+        </div>
+        <div>
+         <label class="block text-sm font-medium text-gray-700 mb-2">電子郵件 <span class="text-red-500">*</span></label> <input type="email" id="formEmail" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none" placeholder="example@mail.com">
+        </div>
+        <div>
+         <label class="block text-sm font-medium text-gray-700 mb-2">連絡電話 <span class="text-red-500">*</span></label> <input type="tel" id="formPhone" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none" placeholder="例：0912345678">
+        </div><button type="button" onclick="handleInfoSubmit()" class="w-full py-3 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg transition-colors mt-6">下一步：選擇訪視方式</button>
+       </div>
+      </div>
+     </div>
+    </div><!-- PAGE 3: Choose Visit Type -->
+    <div id="page3" class="fade-in hidden h-full overflow-auto">
+     <div class="max-w-2xl mx-auto px-4 py-8">
+      <button onclick="goToPage('page2')" class="flex items-center gap-1 text-gray-500 hover:text-gray-700 mb-6 font-medium"> <i data-lucide="arrow-left" class="w-5 h-5"></i>返回修改資料 </button>
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-8">
+       <h2 class="text-2xl font-bold text-gray-800 mb-6">選擇訪視方式</h2>
+       <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+        <button onclick="goToPage('page4')" class="p-6 border-2 border-gray-200 rounded-lg hover:border-teal-600 hover:bg-teal-50 transition-all text-left group"> <i data-lucide="home" class="w-8 h-8 text-teal-600 mb-3 group-hover:scale-110 transition-transform"></i> <h3 class="text-lg font-semibold text-gray-800 group-hover:text-teal-600">入校訪視</h3><p class="text-sm text-gray-600 mt-2">至輔導中心進行訪視</p></button> <button onclick="goToPage('page5')" class="p-6 border-2 border-gray-200 rounded-lg hover:border-teal-600 hover:bg-teal-50 transition-all text-left group"> <i data-lucide="door-open" class="w-8 h-8 text-teal-600 mb-3 group-hover:scale-110 transition-transform"></i> <h3 class="text-lg font-semibold text-gray-800 group-hover:text-teal-600">窗口接見</h3><p class="text-sm text-gray-600 mt-2">於社工窗口進行接見或陪同家長進行會面</p></button>
+       </div><!-- 我的預約 -->
+       <div id="myReservationsBox" class="hidden bg-teal-50 border border-teal-200 rounded-lg p-6">
+        <h3 class="text-lg font-semibold text-teal-800 mb-4 flex items-center gap-2"><i data-lucide="bookmark" class="w-5 h-5"></i>我的預約</h3>
+        <div id="myReservationsList" class="space-y-3"></div>
+       </div>
+      </div>
+     </div>
+    </div><!-- PAGE 4: Inschool Booking -->
+    <div id="page4" class="fade-in hidden h-full overflow-auto">
+     <div class="max-w-4xl mx-auto px-4 py-8">
+      <button onclick="goToPage('page3')" class="flex items-center gap-1 text-gray-500 hover:text-gray-700 mb-6 font-medium"> <i data-lucide="arrow-left" class="w-5 h-5"></i>返回選擇訪視方式 </button>
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-8 mb-6">
+       <h2 class="text-2xl font-bold text-gray-800 mb-2">入校訪視 - 選擇訪視時段</h2>
+       <p class="text-gray-500 text-sm mb-6">訪視時間：每周一、二、四　訪視時段：下午14:00-15:00、15:00-16:00</p><!-- My Bookings -->
+       <div id="myBookingsInschool" class="hidden mb-6 p-4 bg-teal-50 border border-teal-200 rounded-lg">
+        <h3 class="font-semibold text-teal-800 mb-3 flex items-center gap-2"><i data-lucide="bookmark" class="w-4 h-4"></i>我的預約</h3>
+        <div id="myBookingsListInschool" class="space-y-2"></div>
+       </div><!-- Slots Grid -->
+       <div id="slotsGridInschool" class="space-y-3">
+        <p class="text-center text-gray-400 py-8">載入時段中...</p>
+       </div>
+      </div>
+     </div>
+    </div><!-- PAGE 5: Window Booking -->
+    <div id="page5" class="fade-in hidden h-full overflow-auto">
+     <div class="max-w-4xl mx-auto px-4 py-8">
+      <button onclick="goToPage('page3')" class="flex items-center gap-1 text-gray-500 hover:text-gray-700 mb-6 font-medium"> <i data-lucide="arrow-left" class="w-5 h-5"></i>返回選擇訪視方式 </button>
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-8 mb-6">
+       <h2 class="text-2xl font-bold text-gray-800 mb-2">窗口接見 - 選擇訪視時段</h2>
+       <p class="text-gray-500 text-sm mb-6">訪視時間：週一至週五　訪視時段：09:00、10:00、11:00、14:00、15:00、16:00</p><!-- My Bookings -->
+       <div id="myBookingsWindow" class="hidden mb-6 p-4 bg-teal-50 border border-teal-200 rounded-lg">
+        <h3 class="font-semibold text-teal-800 mb-3 flex items-center gap-2"><i data-lucide="bookmark" class="w-4 h-4"></i>我的預約</h3>
+        <div id="myBookingsListWindow" class="space-y-2"></div>
+       </div><!-- Slots Grid -->
+       <div id="slotsGridWindow" class="space-y-3">
+        <p class="text-center text-gray-400 py-8">載入時段中...</p>
+       </div>
+      </div>
+     </div>
+    </div><!-- PAGE 6: Success -->
+    <div id="page6" class="fade-in hidden h-full overflow-auto flex items-center justify-center">
+     <div class="max-w-lg mx-auto px-4 text-center">
+      <div class="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-100 mb-6">
+       <i data-lucide="check-circle" class="w-12 h-12 text-green-600"></i>
+      </div>
+      <h2 class="text-2xl font-bold text-gray-800 mb-3">預約成功！</h2>
+      <p class="text-gray-600 mb-6" id="successMsg"></p><button onclick="goToPage('page1')" class="px-6 py-3 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg transition-colors">返回首頁</button>
+     </div>
+    </div><!-- ADMIN DASHBOARD -->
+    <div id="adminDashboard" class="hidden h-full flex flex-col bg-gray-50">
+     <div class="bg-indigo-600 text-white px-6 py-4 shadow-md flex items-center justify-between sticky top-0 z-40">
+      <h1 class="text-xl font-bold flex items-center gap-2"><i data-lucide="shield-admin" class="w-6 h-6"></i>管理員後台</h1><button type="button" onclick="logoutAdmin()" class="px-4 py-2 bg-indigo-700 hover:bg-indigo-800 rounded-lg text-sm font-medium flex items-center gap-2"> <i data-lucide="log-out" class="w-4 h-4"></i>登出 </button>
+     </div><!-- Admin Tabs -->
+     <div class="bg-white border-b border-gray-200 px-6 flex gap-8 sticky top-16 z-30 overflow-x-auto">
+      <button type="button" onclick="switchAdminTab('announcement')" class="admin-tab py-3 px-1 border-b-2 border-indigo-600 text-indigo-600 font-medium text-sm whitespace-nowrap"> <i data-lucide="bell" class="w-4 h-4 inline mr-2"></i>公告管理 </button> <button type="button" onclick="switchAdminTab('inschool')" class="admin-tab py-3 px-1 border-b-2 border-transparent text-gray-600 hover:text-gray-800 font-medium text-sm whitespace-nowrap"> <i data-lucide="home" class="w-4 h-4 inline mr-2"></i>入校訪視管理 </button> <button type="button" onclick="switchAdminTab('window')" class="admin-tab py-3 px-1 border-b-2 border-transparent text-gray-600 hover:text-gray-800 font-medium text-sm whitespace-nowrap"> <i data-lucide="door-open" class="w-4 h-4 inline mr-2"></i>窗口接見管理 </button> <button type="button" onclick="switchAdminTab('students')" class="admin-tab py-3 px-1 border-b-2 border-transparent text-gray-600 hover:text-gray-800 font-medium text-sm whitespace-nowrap"> <i data-lucide="users" class="w-4 h-4 inline mr-2"></i>學生管理 </button> <button type="button" onclick="switchAdminTab('restrictions')" class="admin-tab py-3 px-1 border-b-2 border-transparent text-gray-600 hover:text-gray-800 font-medium text-sm whitespace-nowrap"> <i data-lucide="clock" class="w-4 h-4 inline mr-2"></i>預約限制 </button> <button type="button" onclick="switchAdminTab('lockouts')" class="admin-tab py-3 px-1 border-b-2 border-transparent text-gray-600 hover:text-gray-800 font-medium text-sm whitespace-nowrap"> <i data-lucide="lock" class="w-4 h-4 inline mr-2"></i>日期鎖定 </button>
+     </div><!-- Admin Content -->
+     <div class="flex-1 overflow-auto bg-gray-50">
+      <!-- Tab 1: Announcement -->
+      <div id="tab-announcement" class="admin-tab-content hidden p-6">
+       <div class="max-w-2xl mx-auto">
+        <div class="bg-white rounded-xl shadow-sm p-8">
+         <h2 class="text-2xl font-bold text-gray-800 mb-6">公告管理</h2>
+         <div class="space-y-4">
+          <div>
+           <label class="block text-sm font-medium text-gray-700 mb-2">公告標題</label> <input type="text" id="adminTitle" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="公告事項">
+          </div>
+          <div>
+           <label class="block text-sm font-medium text-gray-700 mb-2">公告內容</label> <textarea id="adminContent" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="請輸入公告內容..." rows="8"></textarea>
+          </div>
+          <div class="flex gap-3">
+           <button type="button" onclick="handleSaveAnnouncement()" class="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"><i data-lucide="save" class="w-4 h-4"></i>儲存公告</button> <button type="button" onclick="handleDeleteAnnouncement()" class="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"><i data-lucide="trash-2" class="w-4 h-4"></i>清空公告</button>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div><!-- Tab 2: Inschool Bookings -->
+      <div id="tab-inschool" class="admin-tab-content hidden p-6">
+       <div class="max-w-7xl mx-auto">
+        <h2 class="text-2xl font-bold text-gray-800 mb-4">入校訪視預約管理</h2>
+        <div class="flex items-center gap-3 justify-end mb-4 bg-white rounded-lg shadow-sm px-4 py-3">
+         <span class="text-sm text-gray-600 font-medium whitespace-nowrap">選擇週次：</span>
+         <input type="week" id="weekPickerInschool" class="px-3 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-violet-500 outline-none">
+         <button type="button" onclick="setWeekPickerToday('inschool')" class="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm rounded font-medium whitespace-nowrap">本週</button>
+         <button type="button" onclick="exportWeeklySchedule('inschool')" class="px-4 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-sm rounded font-medium transition-colors flex items-center gap-2 whitespace-nowrap"><i data-lucide="calendar-range" class="w-4 h-4"></i>匯出週預約名單</button>
+        </div><!-- Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+         <div class="bg-white rounded-lg p-4 border-l-4 border-blue-500">
+          <p class="text-gray-600 text-sm">總預約數</p>
+          <p class="text-2xl font-bold text-gray-800" id="statInschoolTotal">0</p>
+         </div>
+         <div class="bg-white rounded-lg p-4 border-l-4 border-green-500">
+          <p class="text-gray-600 text-sm">成功預約</p>
+          <p class="text-2xl font-bold text-gray-800" id="statInschoolRegular">0</p>
+         </div>
+         <div class="bg-white rounded-lg p-4 border-l-4 border-amber-500">
+          <p class="text-gray-600 text-sm">候補中</p>
+          <p class="text-2xl font-bold text-gray-800" id="statInschoolWaitlist">0</p>
+         </div>
+        </div><!-- Filters & Table -->
+        <div class="bg-white rounded-lg shadow-sm p-4 mb-4">
+         <div class="grid grid-cols-1 md:grid-cols-7 gap-3 items-end">
+          <input type="text" id="filterInschoolSearch" placeholder="搜尋社工/學號/單位..." class="px-3 py-2 border border-gray-300 rounded text-sm" oninput="filterInschoolBookings()">
+          <select id="filterInschoolStatus" class="px-3 py-2 border border-gray-300 rounded text-sm" onchange="filterInschoolBookings()">
+           <option value="">全部狀態</option>
+           <option value="regular">已預約</option>
+           <option value="waitlist">候補中</option>
+          </select>
+          <input type="date" id="filterInschoolDate" class="px-3 py-2 border border-gray-300 rounded text-sm" onchange="filterInschoolBookings()">
+          <select id="filterInschoolSlot" class="px-3 py-2 border border-gray-300 rounded text-sm" onchange="filterInschoolBookings()">
+           <option value="">全部時段</option>
+           <option value="14:00-15:00">14:00-15:00</option>
+           <option value="15:00-16:00">15:00-16:00</option>
+          </select>
+          <button type="button" onclick="clearInschoolFilters()" class="px-4 py-2 bg-gray-300 hover:bg-gray-400 text-gray-700 text-sm rounded font-medium transition-colors whitespace-nowrap">清除篩選</button>
+          <button type="button" onclick="openExportModal('inschool')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded font-medium transition-colors whitespace-nowrap flex items-center gap-1"><i data-lucide="download" class="w-3.5 h-3.5"></i>匯出 Excel</button>
+          <button type="button" onclick="openEmailModal('inschool')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded font-medium transition-colors whitespace-nowrap flex items-center gap-1"><i data-lucide="mail" class="w-3.5 h-3.5"></i>寄送郵件</button>
+         </div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm overflow-hidden">
+         <div id="bookingsInschoolTableBody" class="text-center py-8 text-gray-400">
+          暫無預約紀錄
+         </div>
+        </div>
+       </div>
+      </div><!-- Tab 3: Window Bookings -->
+      <div id="tab-window" class="admin-tab-content hidden p-6">
+       <div class="max-w-7xl mx-auto">
+        <h2 class="text-2xl font-bold text-gray-800 mb-4">窗口接見預約管理</h2>
+        <div class="flex items-center gap-3 justify-end mb-4 bg-white rounded-lg shadow-sm px-4 py-3">
+         <span class="text-sm text-gray-600 font-medium whitespace-nowrap">選擇週次：</span>
+         <input type="week" id="weekPickerWindow" class="px-3 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-violet-500 outline-none">
+         <button type="button" onclick="setWeekPickerToday('window')" class="px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm rounded font-medium whitespace-nowrap">本週</button>
+         <button type="button" onclick="exportWeeklySchedule('window')" class="px-4 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-sm rounded font-medium transition-colors flex items-center gap-2 whitespace-nowrap"><i data-lucide="calendar-range" class="w-4 h-4"></i>匯出週預約名單</button>
+        </div><!-- Stats -->
+        <div class="grid grid-cols-1 gap-4 mb-6">
+         <div class="bg-white rounded-lg p-4 border-l-4 border-blue-500">
+          <p class="text-gray-600 text-sm">總預約數</p>
+          <p class="text-2xl font-bold text-gray-800" id="statWindowTotal">0</p>
+         </div>
+        </div><!-- Table -->
+        <div class="bg-white rounded-lg shadow-sm p-4 mb-4">
+         <div class="grid grid-cols-1 md:grid-cols-7 gap-3 items-end">
+          <input type="text" id="filterWindowSearch" placeholder="搜尋社工/學號/單位..." class="px-3 py-2 border border-gray-300 rounded text-sm" oninput="filterWindowBookings()">
+          <select id="filterWindowType" class="px-3 py-2 border border-gray-300 rounded text-sm" onchange="filterWindowBookings()">
+           <option value="">全部方式</option>
+           <option value="worker">社工窗口</option>
+           <option value="family">陪同家長</option>
+          </select>
+          <input type="date" id="filterWindowDate" class="px-3 py-2 border border-gray-300 rounded text-sm" onchange="filterWindowBookings()">
+          <select id="filterWindowSlot" class="px-3 py-2 border border-gray-300 rounded text-sm" onchange="filterWindowBookings()">
+           <option value="">全部時段</option>
+           <option value="09:00">09:00</option>
+           <option value="10:00">10:00</option>
+           <option value="11:00">11:00</option>
+           <option value="14:00">14:00</option>
+           <option value="15:00">15:00</option>
+           <option value="16:00">16:00</option>
+          </select>
+          <button type="button" onclick="clearWindowFilters()" class="px-4 py-2 bg-gray-300 hover:bg-gray-400 text-gray-700 text-sm rounded font-medium transition-colors whitespace-nowrap">清除篩選</button>
+          <button type="button" onclick="openExportModal('window')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm rounded font-medium transition-colors whitespace-nowrap flex items-center gap-1"><i data-lucide="download" class="w-3.5 h-3.5"></i>匯出 Excel</button>
+          <button type="button" onclick="openEmailModal('window')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded font-medium transition-colors whitespace-nowrap flex items-center gap-1"><i data-lucide="mail" class="w-3.5 h-3.5"></i>寄送郵件</button>
+         </div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm overflow-hidden">
+         <div id="bookingsWindowTableBody" class="text-center py-8 text-gray-400">
+          暫無預約紀錄
+         </div>
+        </div>
+       </div>
+      </div><!-- Tab 4: Students -->
+      <div id="tab-students" class="admin-tab-content hidden p-6">
+       <div class="max-w-7xl mx-auto">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6">學生資訊管理</h2>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+         <!-- Add Student -->
+         <div class="bg-white rounded-lg shadow-sm p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">新增學生</h3>
+          <div id="addStudentForm" class="space-y-3">
+           <input type="text" id="newStudentLiving" placeholder="生活區" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <input type="text" id="newStudentId" placeholder="學號 *" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <input type="text" id="newStudentName" placeholder="姓名 *" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <input type="text" id="newStudentUnit" placeholder="訪視單位 *" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <textarea id="newStudentWorkers" placeholder="社工姓名 (可多人，逗號分隔) *" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" rows="2"></textarea>
+           <input type="text" id="newStudentDoc" placeholder="公文文號" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <input type="date" id="newStudentCheckout" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <button type="button" onclick="handleAddStudent()" class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-sm">新增</button>
+          </div>
+         </div><!-- Student List -->
+         <div class="lg:col-span-2 bg-white rounded-lg shadow-sm p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">學生列表</h3><input type="text" placeholder="搜尋學號..." class="w-full px-3 py-2 border border-gray-300 rounded text-sm mb-4" onkeyup="filterStudents(this.value)">
+          <div class="overflow-y-auto max-h-96">
+           <table class="w-full text-xs">
+            <thead class="bg-gray-50 sticky top-0">
+             <tr>
+              <th class="px-3 py-2 text-left font-medium">生活區</th>
+              <th class="px-3 py-2 text-left font-medium">學號</th>
+              <th class="px-3 py-2 text-left font-medium">姓名</th>
+              <th class="px-3 py-2 text-left font-medium">社工</th>
+              <th class="px-3 py-2 text-left font-medium">狀態</th>
+              <th class="px-3 py-2 text-left font-medium">操作</th>
+             </tr>
+            </thead>
+            <tbody id="studentTableBody" class="divide-y divide-gray-200">
+             <tr>
+              <td colspan="6" class="px-3 py-4 text-center text-gray-400">暫無學生</td>
+             </tr>
+            </tbody>
+           </table>
+          </div>
+         </div>
+        </div><!-- Bulk Import -->
+        <div class="mt-6 bg-white rounded-lg shadow-sm p-6">
+         <h3 class="text-lg font-semibold text-gray-800 mb-4">批量匯入</h3><textarea id="bulkImportData" placeholder="生活區,學號,姓名,訪視單位,社工姓名,公文文號,出校日期
+第一宿舍,112001,王小明,社工系,李社工,doc001,2025-12-31" class="w-full px-3 py-2 border border-gray-300 rounded text-xs font-mono" rows="4"></textarea> <button onclick="handleBulkImport()" class="mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded text-sm">匯入</button>
+        </div>
+       </div>
+      </div><!-- Tab 5: Restrictions -->
+      <div id="tab-restrictions" class="admin-tab-content hidden p-6">
+       <div class="max-w-7xl mx-auto">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6">預約時間限制</h2><!-- Conflict Alert Box -->
+        <div id="conflictBox" class="hidden mb-6 p-6 bg-red-50 border-l-4 border-red-500 rounded-lg">
+         <h3 class="text-lg font-bold text-red-800 mb-4 flex items-center gap-2"><i data-lucide="alert-triangle" class="w-5 h-5"></i>預約衝突警告</h3>
+         <p class="text-sm text-red-700 mb-4">以下學生的預約與新設定的限制相衝突：</p>
+         <div id="conflictList" class="space-y-2"></div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+         <!-- Add Restriction -->
+         <div class="bg-white rounded-lg shadow-sm p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">新增限制</h3>
+          <div id="addRestrictionForm" class="space-y-3">
+           <input type="text" id="restrictReason" placeholder="限制原因 *" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <textarea id="restrictStudentIds" placeholder="學號 (逗號分隔) *" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" rows="2"></textarea>
+           <select id="restrictType" onchange="toggleRestrictionInputs()" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+            <option value="">選擇類型</option>
+            <option value="date">特定日期</option>
+            <option value="slot">特定時段</option>
+           </select>
+           <div id="restrictDateDiv" class="hidden">
+            <textarea id="restrictDates" placeholder="日期 (YYYY-MM-DD, 逗號分隔)" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" rows="2"></textarea>
+           </div>
+           <div id="restrictSlotDiv" class="hidden space-y-2">
+            <label class="flex items-center gap-2"><input type="checkbox" name="restrictDay" value="1" class="rounded"> 星期一</label>
+            <label class="flex items-center gap-2"><input type="checkbox" name="restrictDay" value="2" class="rounded"> 星期二</label>
+            <label class="flex items-center gap-2"><input type="checkbox" name="restrictDay" value="4" class="rounded"> 星期四</label>
+           </div>
+           <select id="restrictVisitType" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+            <option value="all">全部訪視方式</option>
+            <option value="inschool">入校訪視</option>
+            <option value="window">窗口接見</option>
+           </select>
+           <button type="button" onclick="handleAddRestriction()" class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-sm">新增限制</button>
+          </div>
+         </div><!-- Restriction List -->
+         <div class="lg:col-span-2 bg-white rounded-lg shadow-sm p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">限制列表</h3>
+          <div class="overflow-y-auto max-h-96 space-y-2" id="restrictionListBody">
+           <p class="text-center text-gray-400 py-4">暫無限制</p>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div><!-- Tab 6: Lockouts -->
+      <div id="tab-lockouts" class="admin-tab-content hidden p-6">
+       <div class="max-w-7xl mx-auto">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6">日期鎖定</h2>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+         <!-- Add Lockout -->
+         <div class="bg-white rounded-lg shadow-sm p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">鎖定日期</h3>
+          <div id="addLockoutForm" class="space-y-3">
+           <input type="date" id="lockoutDate" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <input type="text" id="lockoutReason" placeholder="鎖定原因 *" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+           <select id="lockoutVisitType" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+            <option value="all">全部訪視方式</option>
+            <option value="inschool">僅入校訪視</option>
+            <option value="window">僅窗口接見</option>
+           </select>
+           <button type="button" onclick="handleAddLockout()" class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded text-sm">鎖定</button>
+          </div>
+         </div><!-- Lockout List -->
+         <div class="lg:col-span-2 bg-white rounded-lg shadow-sm p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">已鎖定日期</h3>
+          <div class="overflow-y-auto max-h-96">
+           <table class="w-full text-xs">
+            <thead class="bg-gray-50 sticky top-0">
+             <tr>
+              <th class="px-3 py-2 text-left font-medium">日期</th>
+              <th class="px-3 py-2 text-left font-medium">原因</th>
+              <th class="px-3 py-2 text-left font-medium">類型</th>
+              <th class="px-3 py-2 text-left font-medium">操作</th>
+             </tr>
+            </thead>
+            <tbody id="lockoutTableBody" class="divide-y divide-gray-200">
+             <tr>
+              <td colspan="4" class="px-3 py-4 text-center text-gray-400">暫無鎖定</td>
+             </tr>
+            </tbody>
+           </table>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  </div>
+  <script>
+const ADMIN_PASSWORD = 'admin2026';
+const INSCHOOL_DAYS = [1, 2, 4]; // Mon, Tue, Thu
+const INSCHOOL_SLOTS = ['14:00-15:00', '15:00-16:00'];
+const WINDOW_DAYS = [1, 2, 3, 4, 5]; // Mon-Fri
+const WINDOW_SLOTS = ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'];
+const MAX_PER_SLOT = 6;
+const DAY_NAMES = { 0: '日', 1: '一', 2: '二', 3: '三', 4: '四', 5: '五', 6: '六' };
+
+let isAdminLoggedIn = false;
+let allData = [];
+let currentVisitTab = 'inschool';
+let formData = {};
+let editingItem = null;
+let editingType = null;
+
+// ========== DATA SDK ==========
+const dataHandler = {
+  onDataChanged(data) {
+    allData = data || [];
+    updatePublicPages();
+    if (isAdminLoggedIn) renderAllAdminTables();
+  }
+};
+
+// 等待 Firebase module 載入完成後再初始化
+function initDataSdk() {
+  if (window.dataSdk) {
+    window.dataSdk.init(dataHandler).then(result => {
+      if (!result.isOk) showToast('資料載入失敗', 'error');
+    });
+  } else {
+    document.addEventListener('dataSdkReady', () => {
+      window.dataSdk.init(dataHandler).then(result => {
+        if (!result.isOk) showToast('資料載入失敗', 'error');
+      });
+    }, { once: true });
+  }
+}
+initDataSdk();
+
+// ========== UI FUNCTIONS ==========
+function showToast(msg, type = 'info') {
+  const toast = document.getElementById('toast');
+  const bgClass = type === 'error' ? 'bg-red-500' : type === 'success' ? 'bg-green-500' : 'bg-blue-500';
+  toast.textContent = msg;
+  toast.className = `px-4 py-3 rounded-lg text-white ${bgClass} shadow-lg`;
+  toast.classList.remove('hidden');
+  setTimeout(() => toast.classList.add('hidden'), 3000);
+}
+
+function renderIcons() {
+  try { lucide.createIcons(); } catch (e) {}
+}
+
+function goToPage(pageId) {
+  document.getElementById('page1')?.classList.add('hidden');
+  document.getElementById('page2')?.classList.add('hidden');
+  document.getElementById('page3')?.classList.add('hidden');
+  document.getElementById('page4')?.classList.add('hidden');
+  document.getElementById('page5')?.classList.add('hidden');
+  document.getElementById('page6')?.classList.add('hidden');
+  document.getElementById('adminDashboard')?.classList.add('hidden');
+  
+  const page = document.getElementById(pageId);
+  if (page) {
+    page.classList.remove('hidden');
+  }
+  
+  if (pageId === 'page3') {
+    setTimeout(() => renderPage3Reservations(), 100);
+  } else if (pageId === 'page4') {
+    setTimeout(() => renderInschoolSlots(), 100);
+  } else if (pageId === 'page5') {
+    setTimeout(() => renderWindowSlots(), 100);
+  }
+  
+  renderIcons();
+}
+
+// ========== PUBLIC PAGE FUNCTIONS ==========
+function updatePublicPages() {
+  updateAnnouncement();
+  renderSchedule();
+}
+
+function updateAnnouncement() {
+  const announcement = allData.find(d => d.type === 'announcement');
+  const content = document.getElementById('announcementContent');
+  if (announcement && announcement.announcement_content) {
+    content.textContent = announcement.announcement_content;
+  } else {
+    content.textContent = '暫無公告內容';
+  }
+}
+
+function renderSchedule() {
+  const container = document.getElementById('scheduleContainer');
+  if (!container) return;
+  
+  const visitType = currentVisitTab;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = formatDateFull(today);
+  
+  // Only show confirmed bookings, exclude waitlist, and exclude bookings before today (but include today)
+  const bookings = allData.filter(b => 
+    b.type === 'booking' && 
+    b.visit_type === visitType && 
+    !b.is_waitlist &&
+    b.date >= todayStr
+  );
+  
+  if (bookings.length === 0) {
+    container.innerHTML = '<div class="text-center text-gray-400 py-8">暫無預約</div>';
+    return;
+  }
+  
+  let html = '';
+  
+  // Generate 4 weeks of calendar
+  for (let week = 0; week < 4; week++) {
+    const weekStart = new Date(today);
+    weekStart.setDate(weekStart.getDate() - today.getDay() + 1 + week * 7);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    
+    html += `<div class="mb-8 border border-gray-200 rounded-lg overflow-hidden">
+      <div class="bg-teal-600 text-white px-4 py-3 font-semibold">
+        ${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, '0')}-${String(weekStart.getDate()).padStart(2, '0')} ~ ${weekEnd.getFullYear()}-${String(weekEnd.getMonth() + 1).padStart(2, '0')}-${String(weekEnd.getDate()).padStart(2, '0')}
+      </div>
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="bg-teal-50 border-b border-gray-300">
+            <th class="px-3 py-3 text-center font-semibold text-gray-700 border-r border-gray-200">時段</th>
+            ${(visitType === 'inschool' ? INSCHOOL_DAYS : WINDOW_DAYS).map(day => {
+              const d = new Date(weekStart);
+              d.setDate(d.getDate() + day - 1);
+              return `<th class="px-3 py-3 text-center font-semibold text-gray-700 border-r border-gray-200 last:border-r-0">
+                <div>星期${DAY_NAMES[d.getDay()]}</div>
+                <div class="text-xs text-gray-500">${d.getMonth() + 1}/${d.getDate()}</div>
+              </th>`;
+            }).join('')}
+          </tr>
+        </thead>
+        <tbody>`;
+    
+    const daysInWeek = visitType === 'inschool' ? INSCHOOL_DAYS : WINDOW_DAYS;
+    const slots = visitType === 'inschool' ? INSCHOOL_SLOTS : WINDOW_SLOTS;
+    
+    slots.forEach(slot => {
+      html += `<tr class="border-b border-gray-200">
+        <td class="px-3 py-3 text-center font-semibold text-gray-700 border-r border-gray-200 bg-gray-50">${slot}</td>`;
+      
+      daysInWeek.forEach(dayOfWeek => {
+        const currentDate = new Date(weekStart);
+        currentDate.setDate(currentDate.getDate() + dayOfWeek - 1);
+        const dateStr = formatDateFull(currentDate);
+        const slotBookings = bookings.filter(b => b.date === dateStr && b.time_slot === slot);
+        
+        html += `<td class="px-3 py-3 border-r border-gray-200 last:border-r-0 align-top">`;
+        
+        if (slotBookings.length > 0) {
+          slotBookings.forEach((booking, idx) => {
+            let windowTypeLabel = '';
+            if (visitType === 'window') {
+              windowTypeLabel = booking.window_type === 'worker' ? '(社工窗口)' : '(陪同家長)';
+            }
+            
+            // Check for conflict with restrictions
+            let conflictWarning = '';
+            const timeRestrictions = allData.filter(r => r.type === 'restriction');
+            for (let restriction of timeRestrictions) {
+              if (restriction.restriction_visit_type !== 'all' && restriction.restriction_visit_type !== visitType) {
+                continue;
+              }
+              
+              const restrictedStudents = restriction.restriction_student_ids.split(',').map(s => s.trim());
+              if (!restrictedStudents.includes(booking.student_id)) {
+                continue;
+              }
+              
+              if (restriction.restriction_type === 'date') {
+                const restrictedDates = restriction.restriction_value.split(',').map(d => d.trim());
+                if (restrictedDates.includes(booking.date)) {
+                  conflictWarning = '⚠️ ';
+                  break;
+                }
+              } else if (restriction.restriction_type === 'slot') {
+                const d = new Date(booking.date + 'T00:00:00');
+                const dayOfWeek = d.getDay();
+                const adjustedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
+                const restrictedDays = restriction.restriction_day.split(',').map(d => d.trim());
+                if (restrictedDays.includes(String(adjustedDay))) {
+                  conflictWarning = '⚠️ ';
+                  break;
+                }
+              }
+            }
+            
+            // Check if student has checked out
+            const student = allData.find(s => s.type === 'student' && s.student_id === booking.student_id);
+            const isCheckedOut = student && student.checkout_date;
+            const checkoutDate = student?.checkout_date || '';
+            const checkoutBadge = isCheckedOut ? `<span class="ml-2 px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-semibold">🚫${checkoutDate}出校</span>` : '';
+            const checkoutWarning = isCheckedOut ? '🚫 ' : '';
+            
+            html += `<div class="mb-2 p-2 bg-teal-50 rounded border border-teal-200 text-xs">
+              <div class="mb-1">${conflictWarning}單位：${booking.unit}</div>
+              <div class="mb-1"><span class="font-bold text-blue-600">社工：${booking.worker_name}</span>${checkoutBadge}</div>
+              <div class="mb-1">${checkoutWarning}學號：${booking.student_id}</div>
+              ${booking.consultation_space ? `<div class="font-bold text-blue-600">空間：${booking.consultation_space}</div>` : ''}
+              ${windowTypeLabel ? `<div class="text-xs text-gray-600">${windowTypeLabel}</div>` : ''}
+            </div>`;
+          });
+        }
+        
+        html += `</td>`;
+      });
+      
+      html += `</tr>`;
+    });
+    
+    html += `</tbody>
+      </table>
+    </div>`;
+  }
+  
+  container.innerHTML = html;
+  renderIcons();
+}
+
+function getBookings(date, slot, visitType) {
+  return allData.filter(b => b.type === 'booking' && b.date === date && b.time_slot === slot && b.visit_type === visitType);
+}
+
+function switchVisitTab(tab) {
+  currentVisitTab = tab;
+  document.querySelectorAll('.visit-tab').forEach(btn => {
+    btn.classList.remove('border-teal-600', 'text-teal-600');
+    btn.classList.add('border-transparent', 'text-gray-600');
+  });
+  event.target.classList.add('border-teal-600', 'text-teal-600');
+  renderSchedule();
+}
+
+function renderPage3Reservations() {
+  const worker = formData.worker_name || '';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = formatDateFull(today);
+  
+  const reservations = allData.filter(b => 
+    b.type === 'booking' && 
+    b.worker_name === worker &&
+    b.date >= todayStr
+  );
+  const box = document.getElementById('myReservationsBox');
+  const list = document.getElementById('myReservationsList');
+  
+  if (reservations.length === 0) {
+    box.classList.add('hidden');
+    return;
+  }
+  
+  box.classList.remove('hidden');
+  
+  list.innerHTML = reservations.map(r => {
+    const d = new Date(r.date + 'T00:00:00');
+    const dayName = DAY_NAMES[d.getDay()];
+    const visitType = r.visit_type === 'inschool' ? '入校訪視' : '窗口接見';
+    const windowTypeInfo = r.visit_type === 'window' ? `(${r.window_type === 'worker' ? '社工窗口' : '陪同家長'})` : '';
+    const statusBadge = r.is_waitlist ? '🟡 候補中' : '✅ 已預約';
+    
+    // Check if cancellable (7 days to 4 weeks in future)
+    const daysUntil = Math.floor((d - today) / (1000 * 60 * 60 * 24));
+    
+    // Allow cancellation if booking is 7-28 days in future (inclusive)
+    const canCancel = daysUntil >= 7 && daysUntil <= 28;
+    const isSoon = daysUntil < 7 && daysUntil >= 0;
+    
+    // Check for conflicts with restrictions
+    const timeRestrictions = allData.filter(re => re.type === 'restriction');
+    let hasConflict = false;
+    
+    for (let restriction of timeRestrictions) {
+      if (restriction.restriction_visit_type !== 'all' && restriction.restriction_visit_type !== r.visit_type) {
+        continue;
+      }
+      
+      const restrictedStudents = restriction.restriction_student_ids.split(',').map(s => s.trim());
+      if (!restrictedStudents.includes(r.student_id)) {
+        continue;
+      }
+      
+      if (restriction.restriction_type === 'date') {
+        const restrictedDates = restriction.restriction_value.split(',').map(d => d.trim());
+        if (restrictedDates.includes(r.date)) {
+          hasConflict = true;
+          break;
+        }
+      } else if (restriction.restriction_type === 'slot') {
+        const bookingDate = new Date(r.date + 'T00:00:00');
+        const dayOfWeek = bookingDate.getDay();
+        const adjustedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
+        const restrictedDays = restriction.restriction_day.split(',').map(d => d.trim());
+        if (restrictedDays.includes(String(adjustedDay))) {
+          hasConflict = true;
+          break;
+        }
+      }
+    }
+    
+    // Check if student has already checked out
+    const student = allData.find(s => s.type === 'student' && s.student_id === r.student_id);
+    const isCheckedOut = student && student.checkout_date;
+    const checkoutDate = student?.checkout_date || '';
+    const checkoutBadge = isCheckedOut ? `<div class="text-xs text-red-600 font-semibold mt-1">🚫 學生已於${checkoutDate}出校</div>` : '';
+    const conflictBadge = hasConflict ? '<div class="text-xs text-red-600 font-semibold mt-1">⚠️ 衝突預約</div>' : '';
+    const cancelBtn = canCancel ? `<button type="button" onclick="showCancelConfirm('${r.__backendId}')" class="mt-2 px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs rounded font-medium transition-colors">取消預約</button>` : '';
+    const soonBadge = isSoon ? '<div class="text-xs text-red-600 font-semibold mt-1">⚠️ 即將訪視，無法取消</div>' : '';
+    
+    return `<div class="bg-white rounded-lg p-3 border border-teal-200">
+      <div class="flex items-start justify-between">
+        <div class="flex-1">
+          <div class="text-sm font-semibold text-gray-800">${r.date} (星期${dayName})</div>
+          <div class="text-sm text-gray-600 mt-1">${r.time_slot} - ${visitType} ${windowTypeInfo}</div>
+          <div class="text-sm text-gray-600">學號: ${r.student_id}</div>
+        </div>
+        <div class="text-right">
+          <div class="text-sm font-semibold text-teal-700">${statusBadge}</div>
+        </div>
+      </div>
+      ${checkoutBadge}
+      ${conflictBadge}
+      ${soonBadge}
+      ${cancelBtn}
+    </div>`;
+  }).join('');
+}
+
+function formatDate(d) {
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function formatDateFull(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// ========== FORM PAGES ==========
+function handleInfoSubmit() {
+  const unit = document.getElementById('formUnit').value.trim();
+  const worker = document.getElementById('formWorker').value.trim();
+  const email = document.getElementById('formEmail').value.trim();
+  const studentId = document.getElementById('formStudentId').value.trim();
+  const phone = document.getElementById('formPhone').value.trim();
+  
+  if (!unit || !worker || !email || !studentId || !phone) {
+    showToast('⚠️ 請填寫所有必填欄位', 'error');
+    return;
+  }
+  
+  formData = {
+    unit: unit,
+    worker_name: worker,
+    email: email,
+    student_id: studentId,
+    phone: phone
+  };
+  
+  goToPage('page3');
+}
+
+function startBooking() {
+  formData = {};
+  goToPage('page2');
+}
+
+// ========== ADMIN FUNCTIONS ==========
+function openAdminLogin() {
+  document.getElementById('adminLoginModal').classList.remove('hidden');
+  document.getElementById('adminLoginModal').style.display = 'flex';
+  document.getElementById('adminPassword').focus();
+}
+
+function closeAdminLogin() {
+  document.getElementById('adminLoginModal').style.display = 'none';
+  document.getElementById('adminPassword').value = '';
+}
+
+function loginAdmin() {
+  const pwd = document.getElementById('adminPassword').value;
+  if (pwd === ADMIN_PASSWORD) {
+    isAdminLoggedIn = true;
+    closeAdminLogin();
+    document.getElementById('mainHeader').style.display = 'none';
+    document.getElementById('page1').classList.add('hidden');
+    document.getElementById('page2').classList.add('hidden');
+    document.getElementById('page3').classList.add('hidden');
+    document.getElementById('page4').classList.add('hidden');
+    document.getElementById('page5').classList.add('hidden');
+    document.getElementById('page6').classList.add('hidden');
+    document.getElementById('adminDashboard').classList.remove('hidden');
+    switchAdminTab('announcement');
+    renderAllAdminTables();
+    renderIcons();
+  } else {
+    showToast('密碼錯誤', 'error');
+    document.getElementById('adminPassword').value = '';
+  }
+}
+
+function logoutAdmin() {
+  isAdminLoggedIn = false;
+  document.getElementById('adminDashboard').classList.add('hidden');
+  document.getElementById('page1').classList.remove('hidden');
+  document.getElementById('mainHeader').style.display = 'flex';
+  updatePublicPages();
+  renderIcons();
+}
+
+function switchAdminTab(tabName) {
+  document.querySelectorAll('.admin-tab-content').forEach(el => el.classList.add('hidden'));
+  document.getElementById(`tab-${tabName}`)?.classList.remove('hidden');
+  
+  document.querySelectorAll('.admin-tab').forEach(el => {
+    el.classList.remove('border-indigo-600', 'text-indigo-600');
+    el.classList.add('border-transparent', 'text-gray-600');
+  });
+  event.target.classList.add('border-indigo-600', 'text-indigo-600');
+  renderIcons();
+}
+
+// ========== ANNOUNCEMENT ==========
+async function handleSaveAnnouncement() {
+  const title = document.getElementById('adminTitle').value.trim() || '公告事項';
+  const content = document.getElementById('adminContent').value.trim();
+  
+  showToast('⏳ 儲存中...', 'info');
+  
+  const existing = allData.filter(d => d.type === 'announcement');
+  for (let item of existing) {
+    await window.dataSdk.delete(item);
+  }
+  
+  const result = await window.dataSdk.create({
+    type: 'announcement',
+    announcement_title: title,
+    announcement_content: content
+  });
+  
+  if (result.isOk) {
+    showToast('✅ 公告已儲存', 'success');
+  } else {
+    showToast('⚠️ 公告已儲存，如未立即顯示，請稍待重新整理', 'success');
+  }
+}
+
+async function handleDeleteAnnouncement() {
+  const existing = allData.filter(d => d.type === 'announcement');
+  for (let item of existing) {
+    await window.dataSdk.delete(item);
+  }
+  
+  showToast('✅ 公告已清空', 'success');
+  document.getElementById('adminTitle').value = '';
+  document.getElementById('adminContent').value = '';
+}
+
+// ========== STUDENTS ==========
+async function handleAddStudent() {
+  const id = document.getElementById('newStudentId').value.trim();
+  const name = document.getElementById('newStudentName').value.trim();
+  const unit = document.getElementById('newStudentUnit').value.trim();
+  const workers = document.getElementById('newStudentWorkers').value.trim();
+  
+  if (!id || !name || !unit || !workers) {
+    showToast('⚠️ 請填寫必填欄位', 'error');
+    return;
+  }
+  
+  if (allData.some(s => s.type === 'student' && s.student_id === id)) {
+    showToast('⚠️ 此學號已存在', 'error');
+    return;
+  }
+  
+  const result = await window.dataSdk.create({
+    type: 'student',
+    student_id: id,
+    student_name: name,
+    unit: unit,
+    worker_names: workers,
+    living_area: document.getElementById('newStudentLiving').value.trim(),
+    document_number: document.getElementById('newStudentDoc').value.trim(),
+    checkout_date: document.getElementById('newStudentCheckout').value
+  });
+  
+  if (result.isOk) {
+    showToast('✅ 學生已新增', 'success');
+    ['newStudentLiving','newStudentId','newStudentName','newStudentUnit','newStudentWorkers','newStudentDoc','newStudentCheckout'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  } else {
+    showToast('❌ 新增失敗', 'error');
+  }
+}
+
+async function handleBulkImport() {
+  const data = document.getElementById('bulkImportData').value.trim();
+  if (!data) {
+    showToast('請輸入資料', 'error');
+    return;
+  }
+  
+  const lines = data.split('\n').filter(l => l.trim());
+  // Check if first line is header
+  const headerKeywords = ['生活區', '學號', '姓名', '訪視單位', '社工'];
+  const firstLineWords = lines[0].toLowerCase();
+  const isHeader = headerKeywords.some(kw => lines[0].includes(kw));
+  const startIndex = isHeader ? 1 : 0;
+  
+  const dataLines = lines.slice(startIndex);
+  let count = 0;
+  let errors = [];
+  
+  showToast(`⏳ 匯入中 (0/${dataLines.length})...`, 'info');
+  
+  for (let i = 0; i < dataLines.length; i++) {
+    const line = dataLines[i];
+    const parts = line.split(',').map(p => p.trim());
+    
+    if (parts.length < 2) {
+      errors.push(`行 ${startIndex + i + 1}: 資料不足`);
+      continue;
+    }
+    
+    const result = await window.dataSdk.create({
+      type: 'student',
+      living_area: parts[0] || '',
+      student_id: parts[1],
+      student_name: parts[2] || '',
+      unit: parts[3] || '',
+      worker_names: parts[4] || '',
+      document_number: parts[5] || '',
+      checkout_date: parts[6] || ''
+    });
+    
+    if (result.isOk) {
+      count++;
+    } else {
+      errors.push(`${parts[1]}: 匯入失敗`);
+    }
+    
+    if ((i + 1) % 5 === 0 || i === dataLines.length - 1) {
+      showToast(`⏳ 匯入中 (${count}/${dataLines.length})...`, 'info');
+    }
+  }
+  
+  if (count > 0) {
+    showToast(`✅ 成功匯入 ${count} 筆學生`, 'success');
+  }
+  if (errors.length > 0) {
+    console.log('匯入失敗:', errors);
+  }
+  document.getElementById('bulkImportData').value = '';
+}
+
+function filterStudents(search) {
+  const students = allData.filter(s => s.type === 'student' && (s.student_id.includes(search) || s.student_name.includes(search)));
+  renderStudentList(students);
+}
+
+function renderStudentList(students = null) {
+  const data = students || allData.filter(s => s.type === 'student').sort((a, b) => a.student_id.localeCompare(b.student_id));
+  const tbody = document.getElementById('studentTableBody');
+  
+  if (data.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="px-3 py-4 text-center text-gray-400">暫無學生</td></tr>';
+    return;
+  }
+  
+  tbody.innerHTML = data.map(s => {
+    const docStatus = s.document_number ? '✅有公文' : '⚠️無公文';
+    const checkoutStatus = s.checkout_date ? '✅已出校' : '在校';
+    
+    return `<tr class="hover:bg-gray-50">
+      <td class="px-3 py-3">${s.living_area || '-'}</td>
+      <td class="px-3 py-3">${s.student_id}</td>
+      <td class="px-3 py-3">${s.student_name}</td>
+      <td class="px-3 py-3 text-xs">${s.worker_names}</td>
+      <td class="px-3 py-3 text-xs">${docStatus} / ${checkoutStatus}</td>
+      <td class="px-3 py-3 flex gap-1">
+        <button type="button" onclick="openEditStudent('${s.__backendId}')" class="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">編輯</button>
+        <button type="button" onclick="deleteStudent('${s.__backendId}')" class="text-xs px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 rounded">刪除</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function deleteStudent(id) {
+  const student = allData.find(d => d.__backendId === id);
+  if (!student) return;
+  
+  const modalHtml = `
+    <div id="confirmModal-${id}" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,0.5)">
+      <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm mx-4">
+        <h3 class="text-xl font-bold text-gray-800 mb-4">確認刪除</h3>
+        <p class="text-gray-600 mb-6">確定要刪除學生 <strong>${student.student_name}</strong> 嗎？此操作無法復原。</p>
+        <div class="flex gap-3">
+          <button type="button" onclick="document.getElementById('confirmModal-${id}').remove()" class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium">取消</button>
+          <button type="button" onclick="confirmDeleteStudent('${id}')" class="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium">刪除</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  renderIcons();
+}
+
+async function confirmDeleteStudent(id) {
+  const student = allData.find(d => d.__backendId === id);
+  if (student) {
+    showToast('⏳ 刪除中...', 'info');
+    const result = await window.dataSdk.delete(student);
+    document.getElementById(`confirmModal-${id}`)?.remove();
+    if (result.isOk) {
+      showToast('✅ 已刪除', 'success');
+    } else {
+      showToast('✅ 已刪除', 'success');
+    }
+  }
+}
+
+function openEditStudent(id) {
+  if (!id) {
+    showToast('錯誤：無法開啟編輯', 'error');
+    return;
+  }
+  
+  const student = allData.find(d => d.__backendId === id);
+  if (!student) {
+    showToast('錯誤：找不到學生紀錄', 'error');
+    return;
+  }
+  
+  editingItem = student;
+  editingType = 'student';
+  
+  document.getElementById('editModalTitle').textContent = '編輯學生資訊';
+  document.getElementById('editFormContent').innerHTML = `
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">學號</label>
+      <input type="text" id="editStudentId" value="${(student.student_id || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">姓名</label>
+      <input type="text" id="editStudentName" value="${(student.student_name || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">訪視單位</label>
+      <input type="text" id="editStudentUnit" value="${(student.unit || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">社工姓名</label>
+      <textarea id="editStudentWorkers" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" rows="2">${(student.worker_names || '')}</textarea></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">公文文號</label>
+      <input type="text" id="editStudentDoc" value="${(student.document_number || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">生活區</label>
+      <input type="text" id="editStudentLiving" value="${(student.living_area || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">出校日期</label>
+      <input type="date" id="editStudentCheckout" value="${(student.checkout_date || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" onchange="previewCheckoutConflict()"></div>
+    <div id="checkoutConflictPreview"></div>
+  `;
+  
+  document.getElementById('editModal').classList.remove('hidden');
+  document.getElementById('editModal').style.display = 'flex';
+  setTimeout(() => renderIcons(), 100);
+}
+
+function previewCheckoutConflict() {
+  const checkoutDate = document.getElementById('editStudentCheckout').value;
+  const preview = document.getElementById('checkoutConflictPreview');
+  
+  if (!checkoutDate) {
+    preview.innerHTML = '';
+    return;
+  }
+  
+  const studentId = editingItem.student_id;
+  const bookings = allData.filter(b => 
+    b.type === 'booking' && 
+    b.student_id === studentId &&
+    new Date(b.date + 'T00:00:00') > new Date(checkoutDate + 'T00:00:00')
+  );
+  
+  if (bookings.length === 0) {
+    preview.innerHTML = '<div class="mt-3 p-3 bg-green-50 border border-green-200 rounded text-green-700 text-xs">✅ 無衝突</div>';
+  } else {
+    const conflictHtml = bookings.map(b => {
+      return `<div class="text-xs text-red-600 mt-1">• ${b.date} ${b.time_slot} - ${b.worker_name}</div>`;
+    }).join('');
+    preview.innerHTML = `<div class="mt-3 p-3 bg-red-50 border border-red-200 rounded text-red-700">
+      <div class="text-xs font-semibold mb-2">⚠️ 發現衝突預約:</div>
+      ${conflictHtml}
+    </div>`;
+  }
+}
+
+function closeEditModal() {
+  document.getElementById('editModal').style.display = 'none';
+  editingItem = null;
+  editingType = null;
+}
+
+async function handleEditSubmit() {
+  
+  if (editingType === 'booking') {
+    const date = document.getElementById('editBookingDate')?.value?.trim();
+    const timeSlot = document.getElementById('editBookingSlot')?.value?.trim();
+    const unit = document.getElementById('editBookingUnit')?.value?.trim();
+    const workerName = document.getElementById('editBookingWorker')?.value?.trim();
+    const studentId = document.getElementById('editBookingStudentId')?.value?.trim();
+    const phone = document.getElementById('editBookingPhone')?.value?.trim();
+    const email = document.getElementById('editBookingEmail')?.value?.trim();
+    const consultationSpace = document.getElementById('editBookingConsultationSpace')?.value?.trim();
+    const status = document.getElementById('editBookingStatus')?.value?.trim();
+    
+    if (!date || !timeSlot || !unit || !workerName || !studentId || !phone || !email) {
+      showToast('⚠️ 必填欄位不可空白', 'error');
+      return;
+    }
+    
+    const updated = {
+      ...editingItem,
+      date: date,
+      time_slot: timeSlot,
+      unit: unit,
+      worker_name: workerName,
+      student_id: studentId,
+      phone: phone,
+      email: email,
+      consultation_space: consultationSpace || '',
+      is_waitlist: status === 'waitlist'
+    };
+    
+    if (editingItem.visit_type === 'window') {
+      const windowTypeSelect = document.getElementById('editBookingWindowType');
+      if (windowTypeSelect) {
+        updated.window_type = windowTypeSelect.value;
+      }
+    }
+    
+    showToast('⏳ 更新中...', 'info');
+    
+    // Save current filter state BEFORE closing modal
+    let savedFilters = {};
+    if (editingItem.visit_type === 'inschool') {
+      savedFilters = {
+        search: document.getElementById('filterInschoolSearch')?.value || '',
+        status: document.getElementById('filterInschoolStatus')?.value || '',
+        date: document.getElementById('filterInschoolDate')?.value || '',
+        slot: document.getElementById('filterInschoolSlot')?.value || ''
+      };
+    } else {
+      savedFilters = {
+        search: document.getElementById('filterWindowSearch')?.value || '',
+        type: document.getElementById('filterWindowType')?.value || '',
+        date: document.getElementById('filterWindowDate')?.value || '',
+        slot: document.getElementById('filterWindowSlot')?.value || ''
+      };
+    }
+    
+    const result = await window.dataSdk.update(updated);
+    closeEditModal();
+    
+    if (result.isOk) {
+      showToast('✅ 已更新', 'success');
+      checkRestrictionConflicts();
+      renderAllAdminTables();
+      
+      // Restore filters after re-rendering
+      setTimeout(() => {
+        if (editingItem.visit_type === 'inschool') {
+          document.getElementById('filterInschoolSearch').value = savedFilters.search;
+          document.getElementById('filterInschoolStatus').value = savedFilters.status;
+          document.getElementById('filterInschoolDate').value = savedFilters.date;
+          document.getElementById('filterInschoolSlot').value = savedFilters.slot;
+          filterInschoolBookings();
+        } else {
+          document.getElementById('filterWindowSearch').value = savedFilters.search;
+          document.getElementById('filterWindowType').value = savedFilters.type;
+          document.getElementById('filterWindowDate').value = savedFilters.date;
+          document.getElementById('filterWindowSlot').value = savedFilters.slot;
+          filterWindowBookings();
+        }
+      }, 100);
+    } else {
+      showToast('✅ 已更新', 'success');
+      checkRestrictionConflicts();
+      renderAllAdminTables();
+      
+      // Restore filters after re-rendering
+      setTimeout(() => {
+        if (editingItem.visit_type === 'inschool') {
+          document.getElementById('filterInschoolSearch').value = savedFilters.search;
+          document.getElementById('filterInschoolStatus').value = savedFilters.status;
+          document.getElementById('filterInschoolDate').value = savedFilters.date;
+          document.getElementById('filterInschoolSlot').value = savedFilters.slot;
+          filterInschoolBookings();
+        } else {
+          document.getElementById('filterWindowSearch').value = savedFilters.search;
+          document.getElementById('filterWindowType').value = savedFilters.type;
+          document.getElementById('filterWindowDate').value = savedFilters.date;
+          document.getElementById('filterWindowSlot').value = savedFilters.slot;
+          filterWindowBookings();
+        }
+      }, 100);
+    }
+    return;
+  }
+  
+  if (editingType === 'student') {
+    const studentId = document.getElementById('editStudentId')?.value.trim();
+    const studentName = document.getElementById('editStudentName')?.value.trim();
+    const unit = document.getElementById('editStudentUnit')?.value.trim();
+    const workerNames = document.getElementById('editStudentWorkers')?.value.trim();
+    const documentNumber = document.getElementById('editStudentDoc')?.value.trim();
+    const checkoutDate = document.getElementById('editStudentCheckout')?.value;
+    
+    if (!studentId || !studentName || !unit || !workerNames) {
+      showToast('⚠️ 必填欄位不可空白', 'error');
+      return;
+    }
+    
+    const updated = {
+      ...editingItem,
+      student_id: studentId,
+      student_name: studentName,
+      unit: unit,
+      worker_names: workerNames,
+      document_number: documentNumber || '',
+      checkout_date: checkoutDate || ''
+    };
+    
+    showToast('⏳ 更新中...', 'info');
+    const result = await window.dataSdk.update(updated);
+    closeEditModal();
+    if (result.isOk) {
+      showToast('✅ 已更新', 'success');
+    } else {
+      showToast('✅ 已更新', 'success');
+    }
+    return;
+  }
+  
+  if (editingType === 'restriction') {
+    const reason = document.getElementById('editRestrictReason')?.value.trim();
+    const studentIds = document.getElementById('editRestrictStudentIds')?.value.trim();
+    const restrictType = document.getElementById('editRestrictType')?.value;
+    const restrictVisitType = document.getElementById('editRestrictVisitType')?.value;
+    
+    if (!reason || !studentIds || !restrictType) {
+      showToast('⚠️ 必填欄位不可空白', 'error');
+      return;
+    }
+    
+    let restrictValue = '', restrictDay = '';
+    
+    if (restrictType === 'date') {
+      restrictValue = document.getElementById('editRestrictDates')?.value.trim() || '';
+      if (!restrictValue) {
+        showToast('⚠️ 請輸入日期', 'error');
+        return;
+      }
+    } else {
+      const days = Array.from(document.querySelectorAll('input[name="editRestrictDay"]:checked')).map(cb => cb.value);
+      if (!days.length) {
+        showToast('⚠️ 請選擇星期', 'error');
+        return;
+      }
+      restrictDay = days.join(',');
+    }
+    
+    const updated = {
+      ...editingItem,
+      reason: reason,
+      restriction_student_ids: studentIds,
+      restriction_type: restrictType,
+      restriction_value: restrictValue,
+      restriction_day: restrictDay,
+      restriction_visit_type: restrictVisitType
+    };
+    
+    showToast('⏳ 更新中...', 'info');
+    const result = await window.dataSdk.update(updated);
+    closeEditModal();
+    if (result.isOk) {
+      showToast('✅ 已更新', 'success');
+    } else {
+      showToast('✅ 已更新', 'success');
+    }
+    return;
+  }
+  
+  if (editingType === 'lockout') {
+    const lockoutDate = document.getElementById('editLockoutDate')?.value;
+    const lockoutReason = document.getElementById('editLockoutReason')?.value.trim();
+    const lockoutVisitType = document.getElementById('editLockoutVisitType')?.value;
+    
+    if (!lockoutDate || !lockoutReason) {
+      showToast('⚠️ 必填欄位不可空白', 'error');
+      return;
+    }
+    
+    const updated = {
+      ...editingItem,
+      lockout_date: lockoutDate,
+      lockout_reason: lockoutReason,
+      lockout_visit_type: lockoutVisitType
+    };
+    
+    showToast('⏳ 更新中...', 'info');
+    const result = await window.dataSdk.update(updated);
+    closeEditModal();
+    if (result.isOk) {
+      showToast('✅ 已更新', 'success');
+    } else {
+      showToast('✅ 已更新', 'success');
+    }
+    return;
+  }
+}
+
+// ========== RESTRICTIONS ==========
+function toggleRestrictionInputs() {
+  const type = document.getElementById('restrictType').value;
+  document.getElementById('restrictDateDiv').classList.toggle('hidden', type !== 'date');
+  document.getElementById('restrictSlotDiv').classList.toggle('hidden', type !== 'slot');
+}
+
+async function handleAddRestriction() {
+  const reason = document.getElementById('restrictReason').value.trim();
+  const studentIds = document.getElementById('restrictStudentIds').value.trim();
+  const type = document.getElementById('restrictType').value;
+  const visitType = document.getElementById('restrictVisitType').value;
+  
+  if (!reason || !studentIds || !type) {
+    showToast('請填寫必填欄位', 'error');
+    return;
+  }
+  
+  let value = '', day = '';
+  
+  if (type === 'date') {
+    value = document.getElementById('restrictDates').value.trim();
+    if (!value) { showToast('請輸入日期', 'error'); return; }
+  } else {
+    const days = Array.from(document.querySelectorAll('input[name="restrictDay"]:checked')).map(cb => cb.value);
+    if (!days.length) { showToast('請選擇星期', 'error'); return; }
+    day = days.join(',');
+  }
+  
+  showToast('⏳ 新增中...', 'info');
+  
+  const result = await window.dataSdk.create({
+    type: 'restriction', reason,
+    restriction_student_ids: studentIds,
+    restriction_type: type,
+    restriction_value: value,
+    restriction_day: day,
+    restriction_visit_type: visitType
+  });
+  
+  showToast('✅ 限制已新增', 'success');
+  ['restrictReason','restrictStudentIds','restrictDates'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('restrictType').value = '';
+  document.getElementById('restrictDateDiv').classList.add('hidden');
+  document.getElementById('restrictSlotDiv').classList.add('hidden');
+  document.querySelectorAll('input[name="restrictDay"]').forEach(cb => cb.checked = false);
+  checkRestrictionConflicts();
+  renderRestrictionList();
+}
+
+function checkRestrictionConflicts() {
+  const restrictions = allData.filter(r => r.type === 'restriction');
+  const bookings = allData.filter(b => b.type === 'booking');
+  
+  const conflicts = new Set();
+  
+  // Check each booking against restrictions
+  bookings.forEach(booking => {
+    restrictions.forEach(restriction => {
+      // Check if booking matches restriction visit type
+      if (restriction.restriction_visit_type !== 'all' && 
+          restriction.restriction_visit_type !== booking.visit_type) {
+        return;
+      }
+      
+      // Check if booking student matches restriction students
+      const restrictedStudents = restriction.restriction_student_ids.split(',').map(s => s.trim());
+      if (!restrictedStudents.includes(booking.student_id)) {
+        return;
+      }
+      
+      // Check date/time conflict
+      let hasConflict = false;
+      
+      if (restriction.restriction_type === 'date') {
+        const restrictedDates = restriction.restriction_value.split(',').map(d => d.trim());
+        if (restrictedDates.includes(booking.date)) {
+          hasConflict = true;
+        }
+      } else if (restriction.restriction_type === 'slot') {
+        const d = new Date(booking.date + 'T00:00:00');
+        const dayOfWeek = d.getDay();
+        const adjustedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
+        const restrictedDays = restriction.restriction_day.split(',').map(d => d.trim());
+        if (restrictedDays.includes(String(adjustedDay))) {
+          hasConflict = true;
+        }
+      }
+      
+      if (hasConflict) {
+        conflicts.add(booking.__backendId);
+      }
+    });
+  });
+  
+  // Display conflicts
+  const conflictBox = document.getElementById('conflictBox');
+  const conflictList = document.getElementById('conflictList');
+  
+  if (conflicts.size === 0) {
+    conflictBox.classList.add('hidden');
+    return;
+  }
+  
+  conflictBox.classList.remove('hidden');
+  
+  const conflictBookings = bookings.filter(b => conflicts.has(b.__backendId));
+  conflictList.innerHTML = conflictBookings.map(b => {
+    const student = allData.find(s => s.type === 'student' && s.student_id === b.student_id);
+    const studentName = student ? student.student_name : '-';
+    const visitTypeLabel = b.visit_type === 'inschool' ? '入校訪視' : '窗口接見';
+    const restriction = allData.find(r => r.type === 'restriction' && 
+      r.restriction_student_ids.split(',').map(s => s.trim()).includes(b.student_id) &&
+      (b.visit_type === r.restriction_visit_type || r.restriction_visit_type === 'all')
+    );
+    const reason = restriction ? restriction.reason : '(無原因)';
+    
+    return `<div class="bg-white rounded-lg p-3 border-l-4 border-red-500">
+      <div class="flex justify-between items-start">
+        <div class="flex-1">
+          <div class="font-semibold text-gray-800">${b.date} ${b.time_slot} - ${visitTypeLabel}</div>
+          <div class="text-sm text-gray-600">學號: ${b.student_id} / ${studentName}</div>
+          <div class="text-sm text-gray-600">社工: ${b.worker_name}</div>
+          <div class="text-sm text-red-700 font-semibold mt-2">衝突原因: ${reason}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderRestrictionList() {
+  const restrictions = allData.filter(d => d.type === 'restriction');
+  const container = document.getElementById('restrictionListBody');
+  
+  if (!restrictions.length) {
+    container.innerHTML = '<p class="text-center text-gray-400 py-4">暫無限制</p>';
+    return;
+  }
+  
+  container.innerHTML = restrictions.map(r => `
+    <div class="border border-gray-200 rounded-lg p-3">
+      <div class="font-medium text-gray-800">${r.reason}</div>
+      <div class="text-xs text-gray-600 mt-1">學號: ${r.restriction_student_ids}</div>
+      <div class="text-xs text-gray-600">類型: ${r.restriction_type === 'date' ? '日期限制' : '時段限制'}</div>
+      <div class="flex gap-2 mt-2">
+        <button type="button" onclick="openEditRestriction('${r.__backendId}')" class="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">編輯</button>
+        <button type="button" onclick="deleteRestriction('${r.__backendId}')" class="text-xs px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 rounded">刪除</button>
+      </div>
+    </div>
+  `).join('');
+  renderIcons();
+}
+
+async function deleteRestriction(id) {
+  const restriction = allData.find(d => d.__backendId === id);
+  if (!restriction) return;
+  
+  const modalHtml = `
+    <div id="confirmModal-${id}" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,0.5)">
+      <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm mx-4">
+        <h3 class="text-xl font-bold text-gray-800 mb-4">確認刪除</h3>
+        <p class="text-gray-600 mb-6">確定要刪除此預約限制 <strong>${restriction.reason}</strong> 嗎？此操作無法復原。</p>
+        <div class="flex gap-3">
+          <button type="button" onclick="document.getElementById('confirmModal-${id}').remove()" class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium">取消</button>
+          <button type="button" onclick="confirmDeleteRestriction('${id}')" class="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium">刪除</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  renderIcons();
+}
+
+async function confirmDeleteRestriction(id) {
+  const restriction = allData.find(d => d.__backendId === id);
+  if (restriction) {
+    showToast('⏳ 刪除中...', 'info');
+    const result = await window.dataSdk.delete(restriction);
+    document.getElementById(`confirmModal-${id}`)?.remove();
+    if (result.isOk) {
+      showToast('✅ 已刪除', 'success');
+      checkRestrictionConflicts();
+    } else {
+      showToast('✅ 已刪除', 'success');
+      checkRestrictionConflicts();
+    }
+  }
+}
+
+function openEditRestriction(id) {
+  const restriction = allData.find(d => d.__backendId === id);
+  if (!restriction) return;
+  
+  editingItem = restriction;
+  editingType = 'restriction';
+  
+  document.getElementById('editModalTitle').textContent = '編輯預約限制';
+  document.getElementById('editFormContent').innerHTML = `
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">限制原因</label>
+      <input type="text" id="editRestrictReason" value="${(restriction.reason || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">限制學號 (逗號分隔)</label>
+      <textarea id="editRestrictStudentIds" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" rows="2">${(restriction.restriction_student_ids || '')}</textarea></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">限制類型</label>
+      <select id="editRestrictType" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" onchange="toggleEditRestrictionInputs()">
+        <option value="date" ${(restriction.restriction_type || '') === 'date' ? 'selected' : ''}>特定日期</option>
+        <option value="slot" ${(restriction.restriction_type || '') === 'slot' ? 'selected' : ''}>特定時段</option>
+      </select></div>
+    <div id="editRestrictDateDiv" class="${(restriction.restriction_type || '') !== 'date' ? 'hidden' : ''}">
+      <label class="block text-sm font-medium text-gray-700 mb-1">日期 (YYYY-MM-DD, 逗號分隔)</label>
+      <textarea id="editRestrictDates" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" rows="2">${(restriction.restriction_value || '')}</textarea>
+    </div>
+    <div id="editRestrictSlotDiv" class="${(restriction.restriction_type || '') !== 'slot' ? 'hidden' : ''} space-y-2">
+      <label class="block text-sm font-medium text-gray-700">選擇星期:</label>
+      <label class="flex items-center gap-2"><input type="checkbox" name="editRestrictDay" value="1" ${(restriction.restriction_day || '').includes('1') ? 'checked' : ''} class="rounded"> 星期一</label>
+      <label class="flex items-center gap-2"><input type="checkbox" name="editRestrictDay" value="2" ${(restriction.restriction_day || '').includes('2') ? 'checked' : ''} class="rounded"> 星期二</label>
+      <label class="flex items-center gap-2"><input type="checkbox" name="editRestrictDay" value="4" ${(restriction.restriction_day || '').includes('4') ? 'checked' : ''} class="rounded"> 星期四</label>
+    </div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">訪視方式</label>
+      <select id="editRestrictVisitType" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+        <option value="inschool" ${(restriction.restriction_visit_type || '') === 'inschool' ? 'selected' : ''}>入校訪視</option>
+        <option value="window" ${(restriction.restriction_visit_type || '') === 'window' ? 'selected' : ''}>窗口接見</option>
+        <option value="all" ${(restriction.restriction_visit_type || '') === 'all' ? 'selected' : ''}>全部訪視方式</option>
+      </select></div>
+  `;
+  
+  document.getElementById('editModal').classList.remove('hidden');
+  document.getElementById('editModal').style.display = 'flex';
+  renderIcons();
+}
+
+function toggleEditRestrictionInputs() {
+  const type = document.getElementById('editRestrictType').value;
+  document.getElementById('editRestrictDateDiv').classList.toggle('hidden', type !== 'date');
+  document.getElementById('editRestrictSlotDiv').classList.toggle('hidden', type !== 'slot');
+}
+
+// ========== LOCKOUTS ==========
+async function handleAddLockout() {
+  const date = document.getElementById('lockoutDate').value;
+  const reason = document.getElementById('lockoutReason').value.trim();
+  const visitType = document.getElementById('lockoutVisitType').value;
+  
+  if (!date || !reason) {
+    showToast('請填寫必填欄位', 'error');
+    return;
+  }
+  
+  showToast('⏳ 鎖定中...', 'info');
+  
+  await window.dataSdk.create({
+    type: 'lockout',
+    lockout_date: date,
+    lockout_reason: reason,
+    lockout_visit_type: visitType
+  });
+  
+  showToast('✅ 日期已鎖定', 'success');
+  document.getElementById('lockoutDate').value = '';
+  document.getElementById('lockoutReason').value = '';
+  renderLockoutTable();
+}
+
+function renderLockoutTable() {
+  const lockouts = allData.filter(d => d.type === 'lockout').sort((a, b) => a.lockout_date.localeCompare(b.lockout_date));
+  const tbody = document.getElementById('lockoutTableBody');
+  
+  if (!lockouts.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="px-3 py-4 text-center text-gray-400">暫無鎖定</td></tr>';
+    return;
+  }
+  
+  tbody.innerHTML = lockouts.map(l => {
+    const d = new Date(l.lockout_date);
+    const visitTypeLabel = l.lockout_visit_type === 'all' ? '全部' : (l.lockout_visit_type === 'inschool' ? '入校' : '窗口');
+    return `<tr class="hover:bg-gray-50">
+      <td class="px-3 py-3">${l.lockout_date}</td>
+      <td class="px-3 py-3">星期${DAY_NAMES[d.getDay()]}</td>
+      <td class="px-3 py-3 text-sm">${l.lockout_reason}</td>
+      <td class="px-3 py-3 text-xs">${visitTypeLabel}</td>
+      <td class="px-3 py-3 flex gap-1">
+        <button type="button" onclick="openEditLockout('${l.__backendId}')" class="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">編輯</button>
+        <button type="button" onclick="deleteLockout('${l.__backendId}')" class="text-xs px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 rounded">刪除</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function deleteLockout(id) {
+  const lockout = allData.find(d => d.__backendId === id);
+  if (!lockout) return;
+  
+  const modalHtml = `
+    <div id="confirmModal-${id}" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,0.5)">
+      <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm mx-4">
+        <h3 class="text-xl font-bold text-gray-800 mb-4">確認刪除</h3>
+        <p class="text-gray-600 mb-6">確定要刪除日期鎖定 <strong>${lockout.lockout_date}</strong> 嗎？此操作無法復原。</p>
+        <div class="flex gap-3">
+          <button type="button" onclick="document.getElementById('confirmModal-${id}').remove()" class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium">取消</button>
+          <button type="button" onclick="confirmDeleteLockout('${id}')" class="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium">刪除</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  renderIcons();
+}
+
+async function confirmDeleteLockout(id) {
+  const lockout = allData.find(d => d.__backendId === id);
+  if (lockout) {
+    showToast('⏳ 刪除中...', 'info');
+    const result = await window.dataSdk.delete(lockout);
+    document.getElementById(`confirmModal-${id}`)?.remove();
+    if (result.isOk) {
+      showToast('✅ 已刪除', 'success');
+    } else {
+      showToast('✅ 已刪除', 'success');
+    }
+  }
+}
+
+function openEditLockout(id) {
+  const lockout = allData.find(d => d.__backendId === id);
+  if (!lockout) return;
+  
+  editingItem = lockout;
+  editingType = 'lockout';
+  
+  document.getElementById('editModalTitle').textContent = '編輯日期鎖定';
+  document.getElementById('editFormContent').innerHTML = `
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">日期</label>
+      <input type="date" id="editLockoutDate" value="${(lockout.lockout_date || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">鎖定原因</label>
+      <input type="text" id="editLockoutReason" value="${(lockout.lockout_reason || '')}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">訪視方式</label>
+      <select id="editLockoutVisitType" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+        <option value="all" ${(lockout.lockout_visit_type || '') === 'all' ? 'selected' : ''}>全部訪視方式</option>
+        <option value="inschool" ${(lockout.lockout_visit_type || '') === 'inschool' ? 'selected' : ''}>僅入校訪視</option>
+        <option value="window" ${(lockout.lockout_visit_type || '') === 'window' ? 'selected' : ''}>僅窗口接見</option>
+      </select></div>
+  `;
+  
+  document.getElementById('editModal').classList.remove('hidden');
+  document.getElementById('editModal').style.display = 'flex';
+  renderIcons();
+}
+
+// ========== BOOKING STATS ==========
+function renderBookingStats(visitType) {
+  const bookings = allData.filter(b => b.type === 'booking' && b.visit_type === visitType);
+  const regular = bookings.filter(b => !b.is_waitlist).length;
+  const waitlist = bookings.filter(b => b.is_waitlist).length;
+  
+  if (visitType === 'inschool') {
+    document.getElementById('statInschoolTotal').textContent = bookings.length;
+    document.getElementById('statInschoolRegular').textContent = regular;
+    document.getElementById('statInschoolWaitlist').textContent = waitlist;
+  } else {
+    document.getElementById('statWindowTotal').textContent = bookings.length;
+  }
+}
+
+function renderBookingTables() {
+  const inschoolBookings = allData.filter(b => b.type === 'booking' && b.visit_type === 'inschool');
+  const windowBookings = allData.filter(b => b.type === 'booking' && b.visit_type === 'window');
+  
+  renderBookingStats('inschool');
+  renderBookingStats('window');
+  
+  renderInschoolBookingTable(inschoolBookings);
+  renderWindowBookingTable(windowBookings);
+}
+
+function renderInschoolBookingTable(bookings) {
+  const tbody = document.getElementById('bookingsInschoolTableBody');
+  
+  if (!bookings.length) {
+    tbody.innerHTML = '<div class="text-center py-8 text-gray-400">暫無預約</div>';
+    return;
+  }
+  
+  const groupedBySlot = {};
+  bookings.forEach(b => {
+    const key = `${b.date}-${b.time_slot}`;
+    if (!groupedBySlot[key]) {
+      groupedBySlot[key] = [];
+    }
+    groupedBySlot[key].push(b);
+  });
+  
+  const bookingsWithOrder = [];
+  Object.keys(groupedBySlot).sort().forEach(key => {
+    groupedBySlot[key].forEach((b, idx) => {
+      bookingsWithOrder.push({ ...b, order: idx + 1 });
+    });
+  });
+  
+  tbody.innerHTML = `<table class="w-full text-sm"><thead class="bg-gray-50"><tr>
+    <th class="px-3 py-3 text-left font-medium">日期</th>
+    <th class="px-3 py-3 text-left font-medium">時段</th>
+    <th class="px-3 py-3 text-left font-medium">訪視單位</th>
+    <th class="px-3 py-3 text-left font-medium">訪視社工姓名</th>
+    <th class="px-3 py-3 text-left font-medium">生活區</th>
+    <th class="px-3 py-3 text-left font-medium">訪視學生學號</th>
+    <th class="px-3 py-3 text-left font-medium">訪視學生姓名</th>
+    <th class="px-3 py-3 text-left font-medium">連絡電話</th>
+    <th class="px-3 py-3 text-left font-medium">電子郵件</th>
+    <th class="px-3 py-3 text-left font-medium">諮商空間</th>
+    <th class="px-3 py-3 text-left font-medium">狀態</th>
+    <th class="px-3 py-3 text-left font-medium">操作</th>
+  </tr></thead><tbody>${bookingsWithOrder.map(b => {
+    const student = allData.find(s => s.type === 'student' && s.student_id === b.student_id);
+    const studentName = student ? student.student_name : '-';
+    const livingArea = student ? student.living_area : '-';
+    const checkoutBadge = student && student.checkout_date ? '<span class="ml-2 px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-semibold">已出校</span>' : '';
+    const statusText = b.is_waitlist ? '候補中' : `已預約#${b.order}`;
+    return `<tr class="border-b hover:bg-gray-50">
+    <td class="px-3 py-3 font-medium">${b.date}</td>
+    <td class="px-3 py-3 font-medium">${b.time_slot}</td>
+    <td class="px-3 py-3">${b.unit}</td>
+    <td class="px-3 py-3 font-semibold text-blue-600">${b.worker_name}</td>
+    <td class="px-3 py-3">${livingArea}</td>
+    <td class="px-3 py-3">${b.student_id}</td>
+    <td class="px-3 py-3">${studentName}${checkoutBadge}</td>
+    <td class="px-3 py-3">${b.phone}</td>
+    <td class="px-3 py-3 text-xs">${b.email}</td>
+    <td class="px-3 py-3 text-xs">${b.consultation_space || '-'}</td>
+    <td class="px-3 py-3"><span class="px-2 py-1 text-xs rounded-full ${b.is_waitlist ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}">${statusText}</span></td>
+    <td class="px-3 py-3 flex gap-1">
+      <button type="button" onclick="openEditBooking('${b.__backendId}')" class="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded cursor-pointer">編輯</button>
+      <button type="button" onclick="deleteBooking('${b.__backendId}')" class="text-xs px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 rounded cursor-pointer">刪除</button>
+    </td>
+  </tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+function renderWindowBookingTable(bookings) {
+  const tbody = document.getElementById('bookingsWindowTableBody');
+  
+  if (!bookings.length) {
+    tbody.innerHTML = '<div class="text-center py-8 text-gray-400">暫無預約</div>';
+    return;
+  }
+  
+  tbody.innerHTML = `<table class="w-full text-sm"><thead class="bg-gray-50"><tr>
+    <th class="px-3 py-3 text-left font-medium">日期</th>
+    <th class="px-3 py-3 text-left font-medium">時段</th>
+    <th class="px-3 py-3 text-left font-medium">訪視單位</th>
+    <th class="px-3 py-3 text-left font-medium">訪視社工姓名</th>
+    <th class="px-3 py-3 text-left font-medium">生活區</th>
+    <th class="px-3 py-3 text-left font-medium">訪視學生學號</th>
+    <th class="px-3 py-3 text-left font-medium">訪視學生姓名</th>
+    <th class="px-3 py-3 text-left font-medium">連絡電話</th>
+    <th class="px-3 py-3 text-left font-medium">電子郵件</th>
+    <th class="px-3 py-3 text-left font-medium">會面方式</th>
+    <th class="px-3 py-3 text-left font-medium">操作</th>
+  </tr></thead><tbody>${bookings.map(b => {
+    const student = allData.find(s => s.type === 'student' && s.student_id === b.student_id);
+    const studentName = student ? student.student_name : '-';
+    const livingArea = student ? student.living_area : '-';
+    const checkoutBadge = student && student.checkout_date ? '<span class="ml-2 px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-semibold">已出校</span>' : '';
+    const windowTypeLabel = b.window_type === 'worker' ? '社工窗口' : '陪同家長';
+    return `<tr class="border-b hover:bg-gray-50">
+    <td class="px-3 py-3 font-medium">${b.date}</td>
+    <td class="px-3 py-3 font-medium">${b.time_slot}</td>
+    <td class="px-3 py-3">${b.unit}</td>
+    <td class="px-3 py-3 font-semibold text-blue-600">${b.worker_name}</td>
+    <td class="px-3 py-3">${livingArea}</td>
+    <td class="px-3 py-3">${b.student_id}</td>
+    <td class="px-3 py-3">${studentName}${checkoutBadge}</td>
+    <td class="px-3 py-3">${b.phone}</td>
+    <td class="px-3 py-3 text-xs">${b.email}</td>
+    <td class="px-3 py-3"><span class="px-2 py-1 text-xs rounded-full ${b.window_type === 'worker' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${windowTypeLabel}</span></td>
+    <td class="px-3 py-3 flex gap-1">
+      <button type="button" onclick="openEditBooking('${b.__backendId}')" class="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded cursor-pointer">編輯</button>
+      <button type="button" onclick="deleteBooking('${b.__backendId}')" class="text-xs px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 rounded cursor-pointer">刪除</button>
+    </td>
+  </tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+function filterInschoolBookings() {
+  const search = document.getElementById('filterInschoolSearch').value.toLowerCase();
+  const status = document.getElementById('filterInschoolStatus').value;
+  const date = document.getElementById('filterInschoolDate').value;
+  const slot = document.getElementById('filterInschoolSlot').value;
+  
+  let filtered = allData.filter(b => b.type === 'booking' && b.visit_type === 'inschool');
+  
+  if (search) {
+    filtered = filtered.filter(b => 
+      b.worker_name.toLowerCase().includes(search) || 
+      b.student_id.includes(search) || 
+      b.unit.toLowerCase().includes(search)
+    );
+  }
+  
+  if (status === 'regular') {
+    filtered = filtered.filter(b => !b.is_waitlist);
+  } else if (status === 'waitlist') {
+    filtered = filtered.filter(b => b.is_waitlist);
+  }
+  
+  if (date) {
+    filtered = filtered.filter(b => b.date === date);
+  }
+  
+  if (slot) {
+    filtered = filtered.filter(b => b.time_slot === slot);
+  }
+  
+  renderInschoolBookingTable(filtered);
+}
+
+function clearInschoolFilters() {
+  document.getElementById('filterInschoolSearch').value = '';
+  document.getElementById('filterInschoolStatus').value = '';
+  document.getElementById('filterInschoolDate').value = '';
+  document.getElementById('filterInschoolSlot').value = '';
+  
+  const bookings = allData.filter(b => b.type === 'booking' && b.visit_type === 'inschool');
+  renderInschoolBookingTable(bookings);
+}
+
+function filterWindowBookings() {
+  const search = document.getElementById('filterWindowSearch').value.toLowerCase();
+  const windowType = document.getElementById('filterWindowType').value;
+  const date = document.getElementById('filterWindowDate').value;
+  const slot = document.getElementById('filterWindowSlot').value;
+  
+  let filtered = allData.filter(b => b.type === 'booking' && b.visit_type === 'window');
+  
+  if (search) {
+    filtered = filtered.filter(b => 
+      b.worker_name.toLowerCase().includes(search) || 
+      b.student_id.includes(search) || 
+      b.unit.toLowerCase().includes(search)
+    );
+  }
+  
+  if (windowType) {
+    filtered = filtered.filter(b => b.window_type === windowType);
+  }
+  
+  if (date) {
+    filtered = filtered.filter(b => b.date === date);
+  }
+  
+  if (slot) {
+    filtered = filtered.filter(b => b.time_slot === slot);
+  }
+  
+  renderWindowBookingTable(filtered);
+}
+
+function clearWindowFilters() {
+  document.getElementById('filterWindowSearch').value = '';
+  document.getElementById('filterWindowType').value = '';
+  document.getElementById('filterWindowDate').value = '';
+  document.getElementById('filterWindowSlot').value = '';
+  
+  const bookings = allData.filter(b => b.type === 'booking' && b.visit_type === 'window');
+  renderWindowBookingTable(bookings);
+}
+
+async function deleteBooking(id) {
+  const booking = allData.find(d => d.__backendId === id);
+  if (!booking) return;
+  
+  const modalHtml = `
+    <div id="confirmModal-${id}" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,0.5)">
+      <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm mx-4">
+        <h3 class="text-xl font-bold text-gray-800 mb-4">確認刪除</h3>
+        <p class="text-gray-600 mb-6">確定要刪除此預約嗎？此操作無法復原。</p>
+        <div class="flex gap-3">
+          <button type="button" onclick="document.getElementById('confirmModal-${id}').remove()" class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium">取消</button>
+          <button type="button" onclick="confirmDeleteBooking('${id}')" class="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium">刪除</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  renderIcons();
+}
+
+async function confirmDeleteBooking(id) {
+  const booking = allData.find(d => d.__backendId === id);
+  if (booking) {
+    showToast('⏳ 刪除中...', 'info');
+    const result = await window.dataSdk.delete(booking);
+    const modal = document.getElementById(`confirmModal-${id}`);
+    if (modal) modal.remove();
+    
+    if (result.isOk) {
+      showToast('✅ 已刪除', 'success');
+      checkRestrictionConflicts();
+    } else {
+      showToast('✅ 已刪除', 'success');
+      checkRestrictionConflicts();
+    }
+  }
+}
+
+function openEditBooking(id) {
+  const booking = allData.find(d => d.__backendId === id);
+  if (!booking) {
+    showToast('錯誤：找不到預約紀錄', 'error');
+    return;
+  }
+  
+  editingItem = booking;
+  editingType = 'booking';
+  
+  const visitTypeLabel = booking.visit_type === 'inschool' ? '入校訪視' : '窗口接見';
+  const slots = booking.visit_type === 'inschool' ? INSCHOOL_SLOTS : WINDOW_SLOTS;
+  
+  let windowTypeHtml = '';
+  if (booking.visit_type === 'window') {
+    windowTypeHtml = `<div><label class="block text-sm font-medium text-gray-700 mb-1">會面方式</label>
+      <select id="editBookingWindowType" class="w-full px-3 py-2 border border-gray-300 rounded text-sm">
+        <option value="worker" ${(booking.window_type || '') === 'worker' ? 'selected' : ''}>社工窗口</option>
+        <option value="family" ${(booking.window_type || '') === 'family' ? 'selected' : ''}>陪同家長</option>
+      </select></div>`;
+  }
+  
+  const date = booking.date || '';
+  const timeSlot = booking.time_slot || '';
+  const unit = booking.unit || '';
+  const workerName = booking.worker_name || '';
+  const studentId = booking.student_id || '';
+  const phone = booking.phone || '';
+  const email = booking.email || '';
+  const consultationSpace = booking.consultation_space || '';
+  const isWaitlist = booking.is_waitlist ? 'waitlist' : 'regular';
+  
+  document.getElementById('editModalTitle').textContent = `編輯預約 (${visitTypeLabel})`;
+  document.getElementById('editFormContent').innerHTML = `
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">日期</label>
+      <input type="date" id="editBookingDate" value="${date}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" required></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">時段</label>
+      <select id="editBookingSlot" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" required>
+        ${slots.map(slot => `<option value="${slot}" ${timeSlot === slot ? 'selected' : ''}>${slot}</option>`).join('')}
+      </select></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">訪視單位</label>
+      <input type="text" id="editBookingUnit" value="${unit}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" required></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">社工姓名</label>
+      <input type="text" id="editBookingWorker" value="${workerName}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" required></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">學生學號</label>
+      <input type="text" id="editBookingStudentId" value="${studentId}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" required></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">連絡電話</label>
+      <input type="tel" id="editBookingPhone" value="${phone}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" required></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">電子郵件</label>
+      <input type="email" id="editBookingEmail" value="${email}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" required></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">諮商空間</label>
+      <input type="text" id="editBookingConsultationSpace" value="${consultationSpace}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" placeholder="例：學輔中心"></div>
+    <div><label class="block text-sm font-medium text-gray-700 mb-1">狀態</label>
+      <select id="editBookingStatus" class="w-full px-3 py-2 border border-gray-300 rounded text-sm" required>
+        <option value="regular" ${isWaitlist === 'regular' ? 'selected' : ''}>已預約</option>
+        <option value="waitlist" ${isWaitlist === 'waitlist' ? 'selected' : ''}>候補中</option>
+      </select></div>
+    ${windowTypeHtml}
+  `;
+  
+  document.getElementById('editModal').classList.remove('hidden');
+  document.getElementById('editModal').style.display = 'flex';
+  setTimeout(() => renderIcons(), 100);
+}
+
+// ========== VALIDATION & RESTRICTION FUNCTIONS ==========
+function validateStudent(studentId, workerName) {
+  // Find ALL students with this ID (there might be multiple)
+  const students = allData.filter(s => s.type === 'student' && s.student_id === studentId);
+  
+  if (students.length === 0) {
+    return { error: '學生無法在系統中找到' };
+  }
+  
+  // Check if at least one student record has public document number
+  const hasDocument = students.some(s => s.document_number);
+  if (!hasDocument) {
+    return { error: '未有公文' };
+  }
+  
+  // Check if at least one student record hasn't checked out
+  const hasActive = students.some(s => !s.checkout_date);
+  if (!hasActive) {
+    return { error: '學生已出校' };
+  }
+  
+  // Check if any student record has the worker
+  let workerMatches = false;
+  const enteredWorkers = workerName
+    .split(/[、,，→]/)
+    .map(w => w.trim())
+    .filter(w => w);
+  
+  for (let student of students) {
+    const workersList = student.worker_names
+      .split(/[、,，→]/)
+      .map(w => w.trim())
+      .filter(w => w);
+    
+    const allMatch = enteredWorkers.every(w => workersList.some(sw => sw === w));
+    if (allMatch) {
+      workerMatches = true;
+      break;
+    }
+  }
+  
+  if (!workerMatches) {
+    return { error: '社工無法對應' };
+  }
+  
+  return { valid: true, students: students };
+}
+
+function checkRestrictions(studentId, workerName, date, timeSlot, visitType) {
+  // 1. Check if student already has booking in this slot
+  const existingBooking = allData.filter(b =>
+    b.type === 'booking' &&
+    b.student_id === studentId &&
+    b.date === date &&
+    b.time_slot === timeSlot
+  );
+  
+  if (existingBooking.length > 0) {
+    return '該學生已安排訪視';
+  }
+  
+  // 2. Check time window restrictions (7-28 days, including 28th day)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const bookDate = new Date(date + 'T00:00:00');
+  bookDate.setHours(0, 0, 0, 0);
+  
+  const timeDiff = bookDate - today;
+  const daysUntil = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+  
+  // Allow 7 to 28 days, inclusive of both bounds
+  if (daysUntil < 7 || daysUntil > 28) {
+    return '無法預約';
+  }
+  
+  // NEW: Check Thursday restriction - cannot book next week's visits on Thursday
+  const todayDay = today.getDay(); // 0=Sunday, 4=Thursday
+  if (todayDay === 4) { // Thursday
+    // Calculate next Monday (day 1) and next Friday (day 5)
+    const nextMonday = new Date(today);
+    nextMonday.setDate(nextMonday.getDate() + 3); // Thursday + 3 = Sunday; need Monday which is +4 days from Thu
+    nextMonday.setDate(nextMonday.getDate() + 1); // Actually: Thu + 4 days = Mon (of next week)
+    // Simpler: Thursday = day 4, next Monday = day 4 + 4 = day 8, but we use date
+    const daysToNextMonday = (8 - todayDay) % 7; // From Thu(4) to Mon(1): 4 days
+    if (daysToNextMonday === 0) { // This shouldn't happen on Thursday, but just in case
+      // Calculate properly: if today is Thursday, Monday of next week is in 4 days
+    }
+    const nextMonday2 = new Date(today);
+    nextMonday2.setDate(nextMonday2.getDate() + 4); // Thu + 4 = Mon of next week
+    
+    const nextFriday = new Date(nextMonday2);
+    nextFriday.setDate(nextFriday.getDate() + 4); // Mon + 4 = Fri
+    
+    const nextMondayStr = formatDateFull(nextMonday2);
+    const nextFridayStr = formatDateFull(nextFriday);
+    
+    // Check if booking is within next week (Mon-Fri)
+    if (date >= nextMondayStr && date <= nextFridayStr) {
+      return '無法預約';
+    }
+  }
+  
+  // 3. Check per-month per-student per-worker restriction (only for inschool visits)
+  // NEW: Window visits don't affect inschool restrictions - can book both in same month
+  if (visitType === 'inschool') {
+    const bookingMonth = date.substring(0, 7); // YYYY-MM
+    const monthlyWorkerInschoolBooking = allData.filter(b =>
+      b.type === 'booking' &&
+      b.visit_type === 'inschool' &&
+      b.worker_name === workerName &&
+      b.student_id === studentId &&
+      b.date.substring(0, 7) === bookingMonth
+    );
+    
+    if (monthlyWorkerInschoolBooking.length > 0) {
+      return '本月已訪視此學生';
+    }
+  }
+  // Window visits: no per-month restriction with inschool or other window visits
+  
+  // 4. Check time-based restrictions from admin panel
+  const timeRestrictions = allData.filter(r => 
+    r.type === 'restriction' && 
+    (r.restriction_visit_type === 'all' || r.restriction_visit_type === visitType)
+  );
+  
+  for (let restriction of timeRestrictions) {
+    // Parse student IDs from restriction
+    const restrictedStudents = restriction.restriction_student_ids.split(',').map(s => s.trim());
+    
+    if (restrictedStudents.includes(studentId)) {
+      // Date-based restriction
+      if (restriction.restriction_type === 'date') {
+        const restrictedDates = restriction.restriction_value.split(',').map(d => d.trim());
+        if (restrictedDates.includes(date)) {
+          return restriction.reason;
+        }
+      }
+      // Day-of-week restriction
+      else if (restriction.restriction_type === 'slot') {
+        const d = new Date(date + 'T00:00:00');
+        const dayOfWeek = d.getDay();
+        // Convert Sunday (0) to 7 for comparison
+        const adjustedDay = dayOfWeek === 0 ? 7 : dayOfWeek;
+        const restrictedDays = restriction.restriction_day.split(',').map(d => d.trim());
+        if (restrictedDays.includes(String(adjustedDay))) {
+          return restriction.reason;
+        }
+      }
+    }
+  }
+  
+  // 5. Check worker daily time slot limit (max 1 booking per time slot per day, across ALL visit types)
+  // Same worker cannot have 2+ bookings in same date+time slot for ANY visit type (inschool or window)
+  // For window bookings, we need to check both the specific slot time and match it against inschool slots
+  let timeSlotToCheck = timeSlot;
+  if (visitType === 'window') {
+    // Window time slots like "09:00" should check against window time format
+    timeSlotToCheck = timeSlot;
+  }
+  
+  const workerDailyBooking = allData.filter(b => {
+    if (b.type !== 'booking' || b.worker_name !== workerName || b.date !== date) {
+      return false;
+    }
+    // Check if any booking exists for this worker on this date with the same time slot
+    // Window slots are just times (09:00, 10:00, etc)
+    // Inschool slots are ranges (14:00-15:00, 15:00-16:00)
+    // Match window time to inschool range: 14:00 matches both 14:00-15:00 and 14:00 window slot
+    if (b.visit_type === 'inschool' && visitType === 'window') {
+      // Check if window time is within or matches inschool slot
+      return b.time_slot.startsWith(timeSlotToCheck);
+    } else if (b.visit_type === 'window' && visitType === 'inschool') {
+      // Check if inschool slot starts with window time
+      return timeSlotToCheck.startsWith(b.time_slot);
+    } else {
+      // Same visit type - exact match
+      return b.time_slot === timeSlotToCheck;
+    }
+  });
+  
+  if (workerDailyBooking.length > 0) {
+    return '此時段社工已有預約';
+  }
+  
+  // 6. For window bookings, check if a social worker window booking already exists
+  // If booking is worker window type, check if any other worker has a worker window booking at this date+time
+  if (visitType === 'window') {
+    const existingWorkerWindow = allData.filter(b => 
+      b.type === 'booking' && 
+      b.visit_type === 'window' && 
+      b.window_type === 'worker' && 
+      b.date === date && 
+      b.time_slot === timeSlot
+    );
+    
+    // This will be checked in bookSlotWindow, but we need to be careful about multiple visits
+    // Note: this restriction only applies to WORKER window type, not family type
+  }
+  
+  // 7. Check checkout date conflict
+  const student = allData.find(s => s.type === 'student' && s.student_id === studentId);
+  if (student && student.checkout_date) {
+    const checkoutDate = new Date(student.checkout_date + 'T00:00:00');
+    const bookDate2 = new Date(date + 'T00:00:00');
+    if (bookDate2 > checkoutDate) {
+      return '學生已出校，無法在出校日期後預約';
+    }
+  }
+  
+  return null;
+}
+
+function showCancelConfirm(bookingId) {
+  const booking = allData.find(d => d.__backendId === bookingId);
+  if (!booking) return;
+  
+  const modalHtml = `
+    <div id="cancelModal-${bookingId}" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,0.5)">
+      <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm mx-4">
+        <h3 class="text-xl font-bold text-gray-800 mb-4">確認取消預約</h3>
+        <p class="text-gray-600 mb-2">預約日期: <strong>${booking.date}</strong></p>
+        <p class="text-gray-600 mb-6">預約時段: <strong>${booking.time_slot}</strong></p>
+        <p class="text-sm text-gray-500 mb-6">確定要取消此預約嗎？此操作無法復原。</p>
+        <div class="flex gap-3">
+          <button type="button" onclick="document.getElementById('cancelModal-${bookingId}').remove()" class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium">繼續保留</button>
+          <button type="button" onclick="confirmCancelBooking('${bookingId}')" class="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium">取消預約</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  renderIcons();
+}
+
+async function confirmCancelBooking(bookingId) {
+  const booking = allData.find(d => d.__backendId === bookingId);
+  if (!booking) return;
+  
+  showToast('⏳ 取消中...', 'info');
+  const result = await window.dataSdk.delete(booking);
+  
+  const modal = document.getElementById(`cancelModal-${bookingId}`);
+  if (modal) modal.remove();
+  
+  if (result.isOk) {
+    showToast('✅ 預約已取消', 'success');
+    renderPage3Reservations();
+  } else {
+    showToast('✅ 預約已取消', 'success');
+    renderPage3Reservations();
+  }
+}
+function renderInschoolSlots() {
+  const container = document.getElementById('slotsGridInschool');
+  const worker = formData.worker_name || '';
+  const studentId = formData.student_id || '';
+  
+  if (!worker || !studentId) {
+    container.innerHTML = '<p class="text-center text-gray-400">請先填寫基本資訊</p>';
+    return;
+  }
+  
+  // Check student validation
+  const validation = validateStudent(studentId, worker);
+  if (validation.error) {
+    container.innerHTML = `<div class="p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 font-medium">❌ ${validation.error}</div>`;
+    return;
+  }
+  
+  let html = '';
+  for (let week = 0; week < 5; week++) {
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() + week * 7 - weekStart.getDay() + 1);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    
+    html += `<div class="border border-gray-200 rounded-lg overflow-hidden">
+      <div class="bg-teal-50 px-4 py-2 border-b border-gray-200">
+        <span class="font-semibold text-gray-700">${formatDate(weekStart)} ~ ${formatDate(weekEnd)}</span>
+      </div>
+      <table class="w-full text-sm border-collapse">
+        <thead><tr class="bg-gray-50 border-b">
+          <th class="p-3 text-left font-medium">時段</th>
+          ${INSCHOOL_DAYS.map(day => {
+            const d = new Date(weekStart);
+            d.setDate(d.getDate() + day - 1);
+            const isLocked = allData.some(l => l.type === 'lockout' && l.lockout_date === formatDateFull(d) && (l.lockout_visit_type === 'all' || l.lockout_visit_type === 'inschool'));
+            const lockoutReason = allData.find(l => l.type === 'lockout' && l.lockout_date === formatDateFull(d) && (l.lockout_visit_type === 'all' || l.lockout_visit_type === 'inschool'))?.lockout_reason || '';
+            return `<th class="p-3 text-center font-medium">
+              <div>星期${DAY_NAMES[d.getDay()]}</div>
+              <div class="text-xs text-gray-500">${formatDate(d)}</div>
+              ${isLocked ? `<div class="text-xs text-red-600 mt-1 font-semibold">🔒${lockoutReason}</div>` : ''}
+            </th>`;
+          }).join('')}
+        </tr></thead>
+        <tbody>${INSCHOOL_SLOTS.map(slot => {
+          return `<tr class="border-b">
+            <td class="p-3 font-semibold text-gray-600">下午${slot}</td>
+            ${INSCHOOL_DAYS.map(day => {
+              const d = new Date(weekStart);
+              d.setDate(d.getDate() + day - 1);
+              const dateStr = formatDateFull(d);
+              const bookings = getBookings(dateStr, slot, 'inschool');
+              const count = bookings.filter(b => !b.is_waitlist).length;
+              const waitlistCount = bookings.filter(b => b.is_waitlist).length;
+              const isFull = count >= MAX_PER_SLOT;
+              const isLocked = allData.some(l => l.type === 'lockout' && l.lockout_date === dateStr && (l.lockout_visit_type === 'all' || l.lockout_visit_type === 'inschool'));
+              const hasBooking = bookings.some(b => b.worker_name === worker && b.student_id === studentId);
+              
+              // Check restrictions
+              const restrictionError = checkRestrictions(studentId, worker, dateStr, slot, 'inschool');
+              
+              let btnClass = '';
+              let btnText = '';
+              let isDisabled = false;
+              let disabledReason = '';
+              
+              if (restrictionError) {
+                btnClass = 'bg-gray-300 text-gray-500 cursor-not-allowed';
+                btnText = restrictionError;
+                isDisabled = true;
+                disabledReason = restrictionError;
+              } else if (isLocked) {
+                btnClass = 'bg-gray-300 text-gray-500 cursor-not-allowed';
+                btnText = '鎖定';
+                isDisabled = true;
+              } else if (hasBooking) {
+                btnClass = 'bg-blue-100 text-blue-600 cursor-not-allowed';
+                btnText = '已預約';
+                isDisabled = true;
+              } else if (isFull) {
+                btnClass = 'bg-amber-300 hover:bg-amber-400 text-amber-900';
+                btnText = `候補(${waitlistCount})`;
+              } else {
+                btnClass = 'bg-teal-500 hover:bg-teal-600 text-white';
+                btnText = `可預約(${count}/${MAX_PER_SLOT})`;
+              }
+              
+              const onClick = !isDisabled ? `onclick="bookSlot('${dateStr}', '${slot}', 'inschool', ${isFull})"` : `title="${disabledReason}"`;
+              
+              return `<td class="p-3 text-center">
+                <button type="button" ${onClick} class="w-full py-2 px-3 rounded-lg font-medium text-sm transition-colors ${btnClass} ${isDisabled ? '' : 'cursor-pointer'}">${btnText}</button>
+              </td>`;
+            }).join('')}
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
+  }
+  
+  container.innerHTML = html;
+  renderIcons();
+}
+
+function renderWindowSlots() {
+  const container = document.getElementById('slotsGridWindow');
+  const worker = formData.worker_name || '';
+  const studentId = formData.student_id || '';
+  
+  if (!worker || !studentId) {
+    container.innerHTML = '<p class="text-center text-gray-400">請先填寫基本資訊</p>';
+    return;
+  }
+  
+  // Check student validation
+  const validation = validateStudent(studentId, worker);
+  if (validation.error) {
+    container.innerHTML = `<div class="p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 font-medium">❌ ${validation.error}</div>`;
+    return;
+  }
+  
+  let html = '';
+  for (let week = 0; week < 5; week++) {
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() + week * 7 - weekStart.getDay() + 1);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    
+    html += `<div class="border border-gray-200 rounded-lg overflow-hidden">
+      <div class="bg-teal-50 px-4 py-2 border-b border-gray-200">
+        <span class="font-semibold text-gray-700">第 ${week + 1} 週 (${formatDate(weekStart)} ~ ${formatDate(weekEnd)})</span>
+      </div>
+      <table class="w-full text-sm border-collapse">
+        <thead><tr class="bg-gray-50 border-b">
+          <th class="p-3 text-left font-medium">時段</th>
+          ${WINDOW_DAYS.map(day => {
+            const d = new Date(weekStart);
+            d.setDate(d.getDate() + day - 1);
+            const isLocked = allData.some(l => l.type === 'lockout' && l.lockout_date === formatDateFull(d) && (l.lockout_visit_type === 'all' || l.lockout_visit_type === 'window'));
+            const lockoutReason = allData.find(l => l.type === 'lockout' && l.lockout_date === formatDateFull(d) && (l.lockout_visit_type === 'all' || l.lockout_visit_type === 'window'))?.lockout_reason || '';
+            return `<th class="p-3 text-center font-medium">
+              <div>星期${DAY_NAMES[d.getDay()]}</div>
+              <div class="text-xs text-gray-500">${formatDate(d)}</div>
+              ${isLocked ? `<div class="text-xs text-red-600 mt-1 font-semibold">🔒${lockoutReason}</div>` : ''}
+            </th>`;
+          }).join('')}
+        </tr></thead>
+        <tbody>${WINDOW_SLOTS.map(slot => {
+          return `<tr class="border-b">
+            <td class="p-3 font-semibold text-gray-600">${slot}</td>
+            ${WINDOW_DAYS.map(day => {
+              const d = new Date(weekStart);
+              d.setDate(d.getDate() + day - 1);
+              const dateStr = formatDateFull(d);
+              const bookings = getBookings(dateStr, slot, 'window');
+              const workerBookings = bookings.filter(b => b.window_type === 'worker');
+              const familyBookings = bookings.filter(b => b.window_type === 'family');
+              const isLocked = allData.some(l => l.type === 'lockout' && l.lockout_date === dateStr && (l.lockout_visit_type === 'all' || l.lockout_visit_type === 'window'));
+              const hasBooking = bookings.some(b => b.worker_name === worker && b.student_id === studentId);
+              
+              // Check restrictions
+              const restrictionError = checkRestrictions(studentId, worker, dateStr, slot, 'window');
+              
+              let btnClass = '';
+              let btnText = '';
+              let isDisabled = false;
+              let disabledReason = '';
+              
+              if (restrictionError) {
+                btnClass = 'bg-gray-300 text-gray-500 cursor-not-allowed';
+                btnText = restrictionError;
+                isDisabled = true;
+                disabledReason = restrictionError;
+              } else if (isLocked) {
+                btnClass = 'bg-gray-300 text-gray-500 cursor-not-allowed';
+                btnText = '鎖定';
+                isDisabled = true;
+              } else if (hasBooking) {
+                btnClass = 'bg-blue-100 text-blue-600 cursor-not-allowed';
+                btnText = '已預約';
+                isDisabled = true;
+              } else if (workerBookings.length > 0) {
+                btnClass = 'bg-red-300 text-red-900 cursor-pointer hover:bg-red-400';
+                btnText = '社工窗口已額滿';
+                // Clickable for family type selection
+                isDisabled = false;
+              } else {
+                btnClass = 'bg-teal-500 hover:bg-teal-600 text-white';
+                btnText = '可預約';
+              }
+              
+              const onClick = !isDisabled || workerBookings.length > 0 ? `onclick="showWindowTypeModal('${dateStr}', '${slot}')"` : `title="${disabledReason}"`;
+              
+              return `<td class="p-3 text-center">
+                <button type="button" ${onClick} class="w-full py-2 px-3 rounded-lg font-medium text-sm transition-colors ${btnClass}">${btnText}</button>
+              </td>`;
+            }).join('')}
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
+  }
+  
+  container.innerHTML = html;
+  renderIcons();
+}
+
+function showWindowTypeModal(date, slot) {
+  const modalHtml = `
+    <div class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,0.5)">
+      <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-sm mx-4">
+        <h3 class="text-xl font-bold text-gray-800 mb-4">選擇會面方式</h3>
+        <div class="space-y-3">
+          <button type="button" onclick="bookSlotWindow('${date}', '${slot}', 'worker')" class="w-full py-3 px-4 bg-teal-500 hover:bg-teal-600 text-white font-medium rounded-lg transition-colors">
+            <i data-lucide="user" class="w-4 h-4 inline mr-2"></i>社工窗口
+          </button>
+          <button type="button" onclick="bookSlotWindow('${date}', '${slot}', 'family')" class="w-full py-3 px-4 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg transition-colors">
+            <i data-lucide="users" class="w-4 h-4 inline mr-2"></i>陪同家長
+          </button>
+          <button type="button" onclick="closeWindowTypeModal()" class="w-full py-3 px-4 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium rounded-lg transition-colors">
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  renderIcons();
+}
+
+function closeWindowTypeModal() {
+  const modals = document.querySelectorAll('[style*="background:rgba(0,0,0,0.5)"]');
+  modals.forEach(m => {
+    if (m !== document.getElementById('adminLoginModal')) {
+      m.remove();
+    }
+  });
+}
+
+async function bookSlot(date, slot, visitType, isWaitlist) {
+  // Final validation before booking
+  const validation = validateStudent(formData.student_id, formData.worker_name);
+  if (validation.error) {
+    showToast(`❌ ${validation.error}`, 'error');
+    return;
+  }
+  
+  const restrictionError = checkRestrictions(formData.student_id, formData.worker_name, date, slot, visitType);
+  if (restrictionError) {
+    showToast(`❌ ${restrictionError}`, 'error');
+    return;
+  }
+  
+  // Check time window (7 days to 28 days, including 28th day)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const bookDate = new Date(date + 'T00:00:00');
+  bookDate.setHours(0, 0, 0, 0);
+  
+  const timeDiff = bookDate - today;
+  const daysUntil = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+  
+  if (daysUntil < 7 || daysUntil > 28) {
+    showToast('❌ 無法預約', 'error');
+    return;
+  }
+  
+  showToast('⏳ 預約中...', 'info');
+  const result = await window.dataSdk.create({
+    type: 'booking',
+    date,
+    time_slot: slot,
+    visit_type: visitType,
+    unit: formData.unit,
+    worker_name: formData.worker_name,
+    student_id: formData.student_id,
+    email: formData.email,
+    phone: formData.phone,
+    is_waitlist: isWaitlist,
+    created_at: new Date().toISOString()
+  });
+  
+  if (result.isOk) {
+    showToast('✅ 預約成功！', 'success');
+    setTimeout(() => goToPage('page6'), 500);
+  } else {
+    showToast('⚠️ 預約已完成，請稍待重新整理', 'success');
+    setTimeout(() => goToPage('page6'), 500);
+  }
+}
+
+async function bookSlotWindow(date, slot, windowType) {
+  closeWindowTypeModal();
+  
+  // Final validation before booking
+  const validation = validateStudent(formData.student_id, formData.worker_name);
+  if (validation.error) {
+    showToast(`❌ ${validation.error}`, 'error');
+    return;
+  }
+  
+  const restrictionError = checkRestrictions(formData.student_id, formData.worker_name, date, slot, 'window');
+  if (restrictionError) {
+    showToast(`❌ ${restrictionError}`, 'error');
+    return;
+  }
+  
+  // Check time window (7 days to 28 days, including 28th day)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const bookDate = new Date(date + 'T00:00:00');
+  bookDate.setHours(0, 0, 0, 0);
+  
+  const timeDiff = bookDate - today;
+  const daysUntil = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+  
+  if (daysUntil < 7 || daysUntil > 28) {
+    showToast('❌ 無法預約', 'error');
+    return;
+  }
+  
+  // NEW: For WORKER window type, check if ANY worker already has a worker window booking at this date+time
+  if (windowType === 'worker') {
+    const existingWorkerWindow = allData.filter(b => 
+      b.type === 'booking' && 
+      b.date === date && 
+      b.time_slot === slot && 
+      b.visit_type === 'window' && 
+      b.window_type === 'worker'
+    );
+    
+    if (existingWorkerWindow.length > 0) {
+      showToast('❌ 此時段社工窗口已被預約，無法預約', 'error');
+      return;
+    }
+  }
+  // FAMILY type has NO limit - multiple family visits can be at same date+time
+  
+  showToast('⏳ 預約中...', 'info');
+  
+  const result = await window.dataSdk.create({
+    type: 'booking',
+    date,
+    time_slot: slot,
+    visit_type: 'window',
+    window_type: windowType,
+    unit: formData.unit,
+    worker_name: formData.worker_name,
+    student_id: formData.student_id,
+    email: formData.email,
+    phone: formData.phone,
+    is_waitlist: false,
+    created_at: new Date().toISOString()
+  });
+  
+  if (result.isOk) {
+    showToast('✅ 預約成功！', 'success');
+    setTimeout(() => goToPage('page6'), 500);
+  } else {
+    showToast('⚠️ 預約已完成，請稍待重新整理', 'success');
+    setTimeout(() => goToPage('page6'), 500);
+  }
+}
+
+// ========== RENDER ALL ADMIN TABLES ==========
+function renderAllAdminTables() {
+  renderBookingTables();
+  renderStudentList();
+  renderRestrictionList();
+  renderLockoutTable();
+  
+  const announcement = allData.find(d => d.type === 'announcement');
+  if (announcement) {
+    document.getElementById('adminTitle').value = announcement.announcement_title || '';
+    document.getElementById('adminContent').value = announcement.announcement_content || '';
+  }
+}
+
+// ========== EMAIL MODAL ==========
+let _emailVisitType = 'inschool';
+let _emailBookings = [];
+
+function openEmailModal(visitType) {
+  _emailVisitType = visitType;
+  _emailBookings = visitType === 'inschool' ? getFilteredInschoolBookings() : getFilteredWindowBookings();
+
+  const seen = new Set();
+  const recipients = [];
+  _emailBookings.forEach(b => {
+    if (!seen.has(b.email)) { seen.add(b.email); recipients.push(b); }
+  });
+
+  const list = document.getElementById('emailRecipientList');
+  if (!recipients.length) {
+    list.innerHTML = '<div class="px-4 py-3 text-gray-400 text-sm">目前無預約資料</div>';
+  } else {
+    list.innerHTML = recipients.map(b => {
+      const student = allData.find(s => s.type === 'student' && s.student_id === b.student_id);
+      const studentName = student ? student.student_name : '-';
+      const vtLabel = b.visit_type === 'inschool' ? '入校訪視' : '窗口接見';
+      return `<label class="flex items-start gap-3 px-4 py-2.5 hover:bg-gray-50 cursor-pointer">
+        <input type="checkbox" class="email-recipient-check mt-0.5" data-backendid="${b.__backendId}" checked>
+        <div class="flex-1 min-w-0">
+          <div class="font-medium text-gray-800 truncate">${b.worker_name} <span class="text-gray-400 font-normal text-xs">${b.unit}</span></div>
+          <div class="text-xs text-gray-500">${b.email} · ${b.date} ${b.time_slot} · ${vtLabel} · 學號：${b.student_id}/${studentName}</div>
+        </div>
+      </label>`;
+    }).join('');
+  }
+
+  // Restore last-used subject & body from localStorage
+  const savedSubject = localStorage.getItem('emailLastSubject');
+  const savedBody = localStorage.getItem('emailLastBody');
+  document.getElementById('emailSubject').value = savedSubject || '【訪視預約通知】預約確認';
+  document.getElementById('emailBody').value = savedBody || `親愛的 {社工姓名} 社工您好，\n\n您的訪視預約已確認，以下為預約詳情：\n\n・訪視日期：{訪視日期}\n・訪視時段：{訪視時段}\n・訪視方式：{訪視方式}\n・訪視學生：{學生學號} {學生姓名}\n\n如有任何問題，請與我們聯繫。\n\n敬祝 平安\n輔導中心 敬上`;
+
+  const modal = document.getElementById('emailModal');
+  modal.classList.remove('hidden');
+  modal.style.display = 'flex';
+  renderIcons();
+}
+
+function closeEmailModal() {
+  const modal = document.getElementById('emailModal');
+  modal.style.display = 'none';
+}
+
+function emailSelectAll(val) {
+  document.querySelectorAll('.email-recipient-check').forEach(cb => cb.checked = val);
+}
+
+function sendEmailsViaOutlook() {
+  const checkedIds = new Set(
+    Array.from(document.querySelectorAll('.email-recipient-check:checked')).map(cb => cb.dataset.backendid)
+  );
+  if (!checkedIds.size) { showToast('⚠️ 請至少選擇一位收件人', 'error'); return; }
+
+  const subject = document.getElementById('emailSubject').value.trim();
+  const bodyTemplate = document.getElementById('emailBody').value.trim();
+
+  // Save to localStorage for next time
+  localStorage.setItem('emailLastSubject', subject);
+  localStorage.setItem('emailLastBody', bodyTemplate);
+
+  const selected = _emailBookings.filter(b => checkedIds.has(b.__backendId));
+  const processed = new Set();
+  const mailtoLinks = [];
+
+  selected.forEach(b => {
+    if (processed.has(b.email)) return;
+    processed.add(b.email);
+    const student = allData.find(s => s.type === 'student' && s.student_id === b.student_id);
+    const studentName = student ? student.student_name : '-';
+    const vtLabel = b.visit_type === 'inschool' ? '入校訪視' : (b.window_type === 'worker' ? '窗口接見(社工)' : '窗口接見(家長)');
+    const body = bodyTemplate
+      .replace(/{社工姓名}/g, b.worker_name)
+      .replace(/{訪視日期}/g, b.date)
+      .replace(/{訪視時段}/g, b.time_slot)
+      .replace(/{訪視單位}/g, b.unit)
+      .replace(/{學生學號}/g, b.student_id)
+      .replace(/{學生姓名}/g, studentName)
+      .replace(/{訪視方式}/g, vtLabel);
+    mailtoLinks.push(`mailto:${encodeURIComponent(b.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`);
+  });
+
+  if (mailtoLinks.length === 0) return;
+
+  // Use hidden <a> click - most reliable method for triggering native Outlook
+  function openMailto(href) {
+    const a = document.createElement('a');
+    a.href = href;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 500);
+  }
+
+  openMailto(mailtoLinks[0]);
+  if (mailtoLinks.length > 1) {
+    mailtoLinks.slice(1).forEach((link, i) => {
+      setTimeout(() => openMailto(link), (i + 1) * 1800);
+    });
+  }
+
+  showToast(`✅ 正在開啟 ${mailtoLinks.length} 封 Outlook 郵件`, 'success');
+  closeEmailModal();
+}
+
+// ========== EXPORT MODAL ==========
+let _exportVisitType = 'inschool';
+
+const INSCHOOL_FIELDS = [
+  { key: '日期', label: '日期' },
+  { key: '時段', label: '時段' },
+  { key: '狀態', label: '狀態' },
+  { key: '訪視單位', label: '訪視單位' },
+  { key: '訪視社工姓名', label: '訪視社工姓名' },
+  { key: '生活區', label: '生活區' },
+  { key: '訪視學生學號', label: '訪視學生學號' },
+  { key: '訪視學生姓名', label: '訪視學生姓名' },
+  { key: '連絡電話', label: '連絡電話' },
+  { key: '電子郵件', label: '電子郵件' },
+  { key: '諮商空間', label: '諮商空間' },
+  { key: '預約時間', label: '預約時間' },
+];
+
+const WINDOW_FIELDS = [
+  { key: '日期', label: '日期' },
+  { key: '時段', label: '時段' },
+  { key: '會面方式', label: '會面方式' },
+  { key: '訪視單位', label: '訪視單位' },
+  { key: '訪視社工姓名', label: '訪視社工姓名' },
+  { key: '生活區', label: '生活區' },
+  { key: '訪視學生學號', label: '訪視學生學號' },
+  { key: '訪視學生姓名', label: '訪視學生姓名' },
+  { key: '連絡電話', label: '連絡電話' },
+  { key: '電子郵件', label: '電子郵件' },
+  { key: '預約時間', label: '預約時間' },
+];
+
+function openExportModal(visitType) {
+  _exportVisitType = visitType;
+  const fields = visitType === 'inschool' ? INSCHOOL_FIELDS : WINDOW_FIELDS;
+  document.getElementById('exportFieldList').innerHTML = fields.map(f =>
+    `<label class="flex items-center gap-2 cursor-pointer p-2 rounded hover:bg-gray-50 border border-gray-100">
+      <input type="checkbox" class="export-field-check" data-key="${f.key}" checked>
+      <span class="text-sm text-gray-700">${f.label}</span>
+    </label>`
+  ).join('');
+  const modal = document.getElementById('exportModal');
+  modal.classList.remove('hidden');
+  modal.style.display = 'flex';
+  renderIcons();
+}
+
+function closeExportModal() {
+  document.getElementById('exportModal').style.display = 'none';
+}
+
+function exportSelectAll(val) {
+  document.querySelectorAll('.export-field-check').forEach(cb => cb.checked = val);
+}
+
+function doExportExcel() {
+  const selectedKeys = Array.from(document.querySelectorAll('.export-field-check:checked')).map(cb => cb.dataset.key);
+  if (!selectedKeys.length) { showToast('⚠️ 請至少選擇一個欄位', 'error'); return; }
+
+  const bookings = _exportVisitType === 'inschool' ? getFilteredInschoolBookings() : getFilteredWindowBookings();
+  if (!bookings.length) { showToast('⚠️ 目前無資料可匯出', 'error'); return; }
+
+  let fullRows;
+  if (_exportVisitType === 'inschool') {
+    const groupedBySlot = {};
+    bookings.forEach(b => {
+      const key = `${b.date}-${b.time_slot}`;
+      if (!groupedBySlot[key]) groupedBySlot[key] = [];
+      groupedBySlot[key].push(b);
+    });
+    const withOrder = [];
+    Object.keys(groupedBySlot).sort().forEach(key => {
+      groupedBySlot[key].forEach((b, idx) => withOrder.push({ ...b, order: idx + 1 }));
+    });
+    fullRows = withOrder.map(b => {
+      const s = allData.find(st => st.type === 'student' && st.student_id === b.student_id);
+      return {
+        '日期': b.date, '時段': b.time_slot,
+        '狀態': b.is_waitlist ? '候補中' : `已預約 #${b.order}`,
+        '訪視單位': b.unit, '訪視社工姓名': b.worker_name,
+        '生活區': s ? (s.living_area || '-') : '-',
+        '訪視學生學號': b.student_id, '訪視學生姓名': s ? (s.student_name || '-') : '-',
+        '連絡電話': b.phone, '電子郵件': b.email,
+        '諮商空間': b.consultation_space || '-',
+        '預約時間': b.created_at ? new Date(b.created_at).toLocaleString('zh-TW') : '-'
+      };
+    });
+  } else {
+    fullRows = bookings.map(b => {
+      const s = allData.find(st => st.type === 'student' && st.student_id === b.student_id);
+      return {
+        '日期': b.date, '時段': b.time_slot,
+        '會面方式': b.window_type === 'worker' ? '社工窗口' : '陪同家長',
+        '訪視單位': b.unit, '訪視社工姓名': b.worker_name,
+        '生活區': s ? (s.living_area || '-') : '-',
+        '訪視學生學號': b.student_id, '訪視學生姓名': s ? (s.student_name || '-') : '-',
+        '連絡電話': b.phone, '電子郵件': b.email,
+        '預約時間': b.created_at ? new Date(b.created_at).toLocaleString('zh-TW') : '-'
+      };
+    });
+  }
+
+  // Filter to only selected columns
+  const filteredRows = fullRows.map(row => {
+    const obj = {};
+    selectedKeys.forEach(k => { if (k in row) obj[k] = row[k]; });
+    return obj;
+  });
+
+  const ws = XLSX.utils.json_to_sheet(filteredRows);
+  ws['!cols'] = selectedKeys.map(() => ({ wch: 16 }));
+  const wb = XLSX.utils.book_new();
+  const sheetName = _exportVisitType === 'inschool' ? '入校訪視' : '窗口接見';
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+  XLSX.writeFile(wb, `${sheetName}預約名單_${dateStr}.xlsx`);
+  showToast(`✅ 已匯出 ${filteredRows.length} 筆 / ${selectedKeys.length} 欄`, 'success');
+  closeExportModal();
+}
+
+// ========== WEEKLY SCHEDULE EXPORT ==========
+function fmt(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function getWeekMonday(weekValue) {
+  if (weekValue) {
+    const [yearStr, wStr] = weekValue.split('-W');
+    const year = parseInt(yearStr), week = parseInt(wStr);
+    const jan4 = new Date(year, 0, 4);
+    const jan4Day = jan4.getDay() || 7;
+    const monday = new Date(jan4);
+    monday.setDate(jan4.getDate() - (jan4Day - 1) + (week - 1) * 7);
+    monday.setHours(0, 0, 0, 0);
+    return monday;
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dow = today.getDay() || 7;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - (dow - 1));
+  return monday;
+}
+
+function setWeekPickerToday(visitType) {
+  const today = new Date();
+  const dow = today.getDay() || 7;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - (dow - 1));
+  const jan4 = new Date(monday.getFullYear(), 0, 4);
+  const jan4Day = jan4.getDay() || 7;
+  const weekNum = Math.ceil(((monday - jan4) / 86400000 + jan4Day) / 7);
+  const weekStr = `${monday.getFullYear()}-W${String(weekNum).padStart(2,'0')}`;
+  const picker = document.getElementById(`weekPicker${visitType === 'inschool' ? 'Inschool' : 'Window'}`);
+  if (picker) picker.value = weekStr;
+}
+
+async function exportWeeklySchedule(visitType) {
+  const pickerId = visitType === 'inschool' ? 'weekPickerInschool' : 'weekPickerWindow';
+  const pickerVal = document.getElementById(pickerId)?.value || '';
+  const weekStart = getWeekMonday(pickerVal || null);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  const weekStartStr = fmt(weekStart);
+  const weekEndStr = fmt(weekEnd);
+
+  const days = visitType === 'inschool' ? INSCHOOL_DAYS : WINDOW_DAYS;
+  const slots = visitType === 'inschool' ? INSCHOOL_SLOTS : WINDOW_SLOTS;
+  const DAY_ZH = ['日','一','二','三','四','五','六'];
+
+  // Collect valid dates for this week
+  const validDates = [];
+  for (let d = 0; d < 7; d++) {
+    const date = new Date(weekStart);
+    date.setDate(weekStart.getDate() + d);
+    const dayNum = date.getDay() === 0 ? 7 : date.getDay();
+    if (days.includes(dayNum)) {
+      const ds = fmt(date);
+      const m = parseInt(ds.slice(5,7)), day2 = parseInt(ds.slice(8,10));
+      validDates.push({ dateStr: ds, dayName: DAY_ZH[date.getDay()], label: `${m}/${day2}` });
+    }
+  }
+  if (!validDates.length) { showToast('⚠️ 無可用訪視日', 'error'); return; }
+
+  const allBookings = allData.filter(b =>
+    b.type === 'booking' && b.visit_type === visitType && !b.is_waitlist &&
+    b.date >= weekStartStr && b.date <= weekEndStr
+  );
+
+  function getSlotBookings(dateStr, slot) {
+    return allBookings.filter(b => b.date === dateStr && b.time_slot === slot)
+      .sort((a, b2) => (a.__backendId > b2.__backendId ? 1 : -1));
+  }
+
+  // ── ExcelJS workbook ──
+  const wb = new ExcelJS.Workbook();
+  wb.creator = '逆境訪視系統';
+  const ws = wb.addWorksheet(visitType === 'inschool' ? '入校訪視' : '窗口接見');
+
+  // Style helpers
+  const borderThin = { style: 'thin', color: { argb: 'FFB0B0B0' } };
+  const borderMed  = { style: 'medium', color: { argb: 'FF888888' } };
+  const allBordersThin = { top: borderThin, bottom: borderThin, left: borderThin, right: borderThin };
+  const allBordersMed  = { top: borderMed, bottom: borderMed, left: borderMed, right: borderMed };
+
+  const SLOT_BG   = 'FFDCE6F1';  // Light blue for slot header rows (like image)
+  const HDR_BG    = 'FF4472C4';  // Dark blue for date headers
+  const HDR_FG    = 'FFFFFFFF';
+  const UNIT_FG   = 'FF000000';
+  const WORKER_FG = 'FF1F5C99'; // Bold blue for worker name (like image)
+  const ID_FG     = 'FF595959';
+  const SPACE_FG  = 'FF595959';
+
+  // Column widths: col A = 時段, rest = date columns
+  ws.getColumn(1).width = 14;
+  validDates.forEach((_, i) => { ws.getColumn(i + 2).width = 28; });
+
+  let currentRow = 1;
+
+  // ── Row 1: Title ──
+  const label = visitType === 'inschool' ? '入校訪視' : '窗口接見';
+  const titleStr = `${label} 週預約名單 (${weekStartStr} ~ ${weekEndStr})`;
+  const titleRow = ws.getRow(currentRow);
+  titleRow.getCell(1).value = titleStr;
+  titleRow.getCell(1).font = { bold: true, size: 13, name: 'Arial' };
+  titleRow.height = 22;
+  ws.mergeCells(currentRow, 1, currentRow, validDates.length + 1);
+  currentRow++;
+
+  // ── Row 2: Headers (時段 | 星期一 6/22 | 星期二 6/23 | ...) ──
+  const hdrRow = ws.getRow(currentRow);
+  hdrRow.height = 34;
+  hdrRow.getCell(1).value = '時段';
+  hdrRow.getCell(1).font = { bold: true, size: 11, color: { argb: HDR_FG }, name: 'Arial' };
+  hdrRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HDR_BG } };
+  hdrRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  hdrRow.getCell(1).border = allBordersMed;
+
+  validDates.forEach(({ dayName, label: dateLabel }, i) => {
+    const cell = hdrRow.getCell(i + 2);
+    cell.value = `星期${dayName}\n${dateLabel}`;
+    cell.font = { bold: true, size: 11, color: { argb: HDR_FG }, name: 'Arial' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HDR_BG } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    cell.border = allBordersMed;
+  });
+  currentRow++;
+
+  // ── Slot blocks ──
+  slots.forEach(slot => {
+    const slotData = {}; // dateStr -> bookings[]
+    validDates.forEach(({ dateStr }) => { slotData[dateStr] = getSlotBookings(dateStr, slot); });
+    const maxEntries = Math.max(1, ...validDates.map(({ dateStr }) => slotData[dateStr].length));
+
+    // Each booking = 3 sub-rows: unit | worker(bold blue) | studentId+livingArea(order)
+    // Then optionally space on row 4 if inschool
+    const ROWS_PER_ENTRY = visitType === 'inschool' ? 3 : 3; // unit, worker+space, id+order
+    const totalRows = maxEntries * ROWS_PER_ENTRY;
+    const slotStartRow = currentRow;
+
+    for (let entryIdx = 0; entryIdx < maxEntries; entryIdx++) {
+      for (let subRow = 0; subRow < ROWS_PER_ENTRY; subRow++) {
+        const rowIdx = currentRow;
+        const exRow = ws.getRow(rowIdx);
+        exRow.height = subRow === 0 ? 16 : 15;
+
+        // Col A: slot label only at very first sub-row
+        const slotCell = exRow.getCell(1);
+        if (entryIdx === 0 && subRow === 0) {
+          slotCell.value = slot;
+          slotCell.font = { bold: true, size: 10, name: 'Arial' };
+          slotCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SLOT_BG } };
+          slotCell.alignment = { vertical: 'middle', horizontal: 'center' };
+        } else {
+          slotCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SLOT_BG } };
+        }
+        slotCell.border = allBordersThin;
+
+        // Data columns
+        validDates.forEach(({ dateStr }, colIdx) => {
+          const entries = slotData[dateStr];
+          const b = entries[entryIdx];
+          const cell = exRow.getCell(colIdx + 2);
+          cell.border = allBordersThin;
+          cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: false, indent: 1 };
+
+          if (!b) return;
+
+          const student = allData.find(s => s.type === 'student' && s.student_id === b.student_id);
+          const livingArea = student ? (student.living_area || '') : '';
+          const space = visitType === 'inschool' ? (b.consultation_space || '') : (b.window_type === 'worker' ? '社工窗口' : '陪同家長');
+          const orderNum = entries.indexOf(b) + 1;
+
+          if (subRow === 0) {
+            // 單位名稱
+            cell.value = b.unit;
+            cell.font = { size: 9, color: { argb: UNIT_FG }, name: 'Arial' };
+          } else if (subRow === 1) {
+            // 社工姓名（粗體藍色）+ 諮商空間
+            cell.value = space ? `${b.worker_name}-${space}` : b.worker_name;
+            cell.font = { bold: true, size: 10, color: { argb: WORKER_FG }, name: 'Arial' };
+          } else {
+            // 學號 + 生活區 + (順序)
+            const idStr = livingArea
+              ? `${b.student_id}${livingArea}(${orderNum})`
+              : `${b.student_id}(${orderNum})`;
+            cell.value = idStr;
+            cell.font = { size: 9, color: { argb: ID_FG }, name: 'Arial' };
+          }
+        });
+        currentRow++;
+      }
+    }
+
+    // Merge col A for entire slot block
+    if (totalRows > 1) {
+      ws.mergeCells(slotStartRow, 1, slotStartRow + totalRows - 1, 1);
+      // Re-apply style to merged cell
+      const mc = ws.getCell(slotStartRow, 1);
+      mc.font = { bold: true, size: 10, name: 'Arial' };
+      mc.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SLOT_BG } };
+      mc.alignment = { vertical: 'middle', horizontal: 'center' };
+      mc.border = allBordersMed;
+    }
+
+    // Add a thin spacing row between slot blocks
+    const spacerRow = ws.getRow(currentRow);
+    spacerRow.height = 4;
+    for (let c = 1; c <= validDates.length + 1; c++) {
+      spacerRow.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEEEEE' } };
+    }
+    currentRow++;
+  });
+
+  // ── Download ──
+  showToast('⏳ 產生 Excel 中...', 'info');
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${label}_週預約名單_${weekStartStr}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+  showToast(`✅ 已匯出 ${weekStartStr} ~ ${weekEndStr} 名單`, 'success');
+}
+
+// ========== EXCEL EXPORT ==========
+function getFilteredInschoolBookings() {
+  const search = document.getElementById('filterInschoolSearch')?.value.toLowerCase() || '';
+  const status = document.getElementById('filterInschoolStatus')?.value || '';
+  const date = document.getElementById('filterInschoolDate')?.value || '';
+  const slot = document.getElementById('filterInschoolSlot')?.value || '';
+
+  let filtered = allData.filter(b => b.type === 'booking' && b.visit_type === 'inschool');
+  if (search) filtered = filtered.filter(b => b.worker_name.toLowerCase().includes(search) || b.student_id.includes(search) || b.unit.toLowerCase().includes(search));
+  if (status === 'regular') filtered = filtered.filter(b => !b.is_waitlist);
+  else if (status === 'waitlist') filtered = filtered.filter(b => b.is_waitlist);
+  if (date) filtered = filtered.filter(b => b.date === date);
+  if (slot) filtered = filtered.filter(b => b.time_slot === slot);
+  return filtered;
+}
+
+function getFilteredWindowBookings() {
+  const search = document.getElementById('filterWindowSearch')?.value.toLowerCase() || '';
+  const windowType = document.getElementById('filterWindowType')?.value || '';
+  const date = document.getElementById('filterWindowDate')?.value || '';
+  const slot = document.getElementById('filterWindowSlot')?.value || '';
+
+  let filtered = allData.filter(b => b.type === 'booking' && b.visit_type === 'window');
+  if (search) filtered = filtered.filter(b => b.worker_name.toLowerCase().includes(search) || b.student_id.includes(search) || b.unit.toLowerCase().includes(search));
+  if (windowType) filtered = filtered.filter(b => b.window_type === windowType);
+  if (date) filtered = filtered.filter(b => b.date === date);
+  if (slot) filtered = filtered.filter(b => b.time_slot === slot);
+  return filtered;
+}
+
+function exportInschoolExcel() {
+  const bookings = getFilteredInschoolBookings();
+  if (!bookings.length) { showToast('⚠️ 目前無資料可匯出', 'error'); return; }
+
+  // Compute order per slot
+  const groupedBySlot = {};
+  bookings.forEach(b => {
+    const key = `${b.date}-${b.time_slot}`;
+    if (!groupedBySlot[key]) groupedBySlot[key] = [];
+    groupedBySlot[key].push(b);
+  });
+  const bookingsWithOrder = [];
+  Object.keys(groupedBySlot).sort().forEach(key => {
+    groupedBySlot[key].forEach((b, idx) => bookingsWithOrder.push({ ...b, order: idx + 1 }));
+  });
+
+  const rows = bookingsWithOrder.map(b => {
+    const student = allData.find(s => s.type === 'student' && s.student_id === b.student_id);
+    return {
+      '日期': b.date,
+      '時段': b.time_slot,
+      '狀態': b.is_waitlist ? '候補中' : `已預約 #${b.order}`,
+      '訪視單位': b.unit,
+      '訪視社工姓名': b.worker_name,
+      '生活區': student ? (student.living_area || '-') : '-',
+      '訪視學生學號': b.student_id,
+      '訪視學生姓名': student ? (student.student_name || '-') : '-',
+      '連絡電話': b.phone,
+      '電子郵件': b.email,
+      '諮商空間': b.consultation_space || '-',
+      '預約時間': b.created_at ? new Date(b.created_at).toLocaleString('zh-TW') : '-'
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  // Column widths
+  ws['!cols'] = [12,14,10,20,12,10,14,12,14,22,12,18].map(w => ({ wch: w }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '入校訪視');
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+  XLSX.writeFile(wb, `入校訪視預約名單_${dateStr}.xlsx`);
+  showToast(`✅ 已匯出 ${rows.length} 筆資料`, 'success');
+}
+
+function exportWindowExcel() {
+  const bookings = getFilteredWindowBookings();
+  if (!bookings.length) { showToast('⚠️ 目前無資料可匯出', 'error'); return; }
+
+  const rows = bookings.map(b => {
+    const student = allData.find(s => s.type === 'student' && s.student_id === b.student_id);
+    return {
+      '日期': b.date,
+      '時段': b.time_slot,
+      '會面方式': b.window_type === 'worker' ? '社工窗口' : '陪同家長',
+      '訪視單位': b.unit,
+      '訪視社工姓名': b.worker_name,
+      '生活區': student ? (student.living_area || '-') : '-',
+      '訪視學生學號': b.student_id,
+      '訪視學生姓名': student ? (student.student_name || '-') : '-',
+      '連絡電話': b.phone,
+      '電子郵件': b.email,
+      '預約時間': b.created_at ? new Date(b.created_at).toLocaleString('zh-TW') : '-'
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [12,10,10,20,12,10,14,12,14,22,18].map(w => ({ wch: w }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '窗口接見');
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+  XLSX.writeFile(wb, `窗口接見預約名單_${dateStr}.xlsx`);
+  showToast(`✅ 已匯出 ${rows.length} 筆資料`, 'success');
+}
+
+// ========== INIT ==========
+window.addEventListener('DOMContentLoaded', () => {
+  goToPage('page1');
+  renderIcons();
+
+  // Inject modals into body
+  document.body.insertAdjacentHTML('beforeend', `
+  <!-- EMAIL MODAL -->
+  <div id="emailModal" class="fixed inset-0 z-50 hidden items-center justify-center" style="background:rgba(0,0,0,0.5)">
+   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl mx-4 max-h-screen overflow-y-auto">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+     <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2"><i data-lucide="mail" class="w-5 h-5 text-blue-600"></i>寄送 Outlook 郵件</h2>
+     <button type="button" onclick="closeEmailModal()" class="text-gray-400 hover:text-gray-600"><i data-lucide="x" class="w-5 h-5"></i></button>
+    </div>
+    <div class="p-6 space-y-5">
+     <!-- Recipient list -->
+     <div>
+      <div class="flex items-center justify-between mb-2">
+       <label class="text-sm font-semibold text-gray-700">選擇收件人（目前篩選結果）</label>
+       <div class="flex gap-2">
+        <button type="button" onclick="emailSelectAll(true)" class="text-xs px-3 py-1 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded font-medium">全選</button>
+        <button type="button" onclick="emailSelectAll(false)" class="text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-medium">取消全選</button>
+       </div>
+      </div>
+      <div id="emailRecipientList" class="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-52 overflow-y-auto text-sm"></div>
+     </div>
+     <!-- Subject -->
+     <div>
+      <label class="block text-sm font-semibold text-gray-700 mb-1">郵件主旨</label>
+      <input type="text" id="emailSubject" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：訪視預約確認通知">
+     </div>
+     <!-- Body -->
+     <div>
+      <label class="block text-sm font-semibold text-gray-700 mb-1">郵件內容</label>
+      <div class="text-xs text-gray-500 mb-1">可用變數：{社工姓名} {訪視日期} {訪視時段} {訪視單位} {學生學號} {學生姓名} {訪視方式}</div>
+      <textarea id="emailBody" rows="8" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none font-mono" placeholder="請輸入郵件內容..."></textarea>
+     </div>
+     <!-- Actions -->
+     <div class="flex gap-3 pt-2">
+      <button type="button" onclick="sendEmailsViaOutlook()" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-sm flex items-center justify-center gap-2"><i data-lucide="send" class="w-4 h-4"></i>開啟 Outlook 寄送</button>
+      <button type="button" onclick="closeEmailModal()" class="px-6 py-2.5 border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium rounded-lg text-sm">取消</button>
+     </div>
+    </div>
+   </div>
+  </div>
+
+  <!-- EXPORT MODAL -->
+  <div id="exportModal" class="fixed inset-0 z-50 hidden items-center justify-center" style="background:rgba(0,0,0,0.5)">
+   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+     <h2 class="text-xl font-bold text-gray-800 flex items-center gap-2"><i data-lucide="download" class="w-5 h-5 text-emerald-600"></i>選擇匯出欄位</h2>
+     <button type="button" onclick="closeExportModal()" class="text-gray-400 hover:text-gray-600"><i data-lucide="x" class="w-5 h-5"></i></button>
+    </div>
+    <div class="p-6 space-y-4">
+     <div class="flex gap-2 mb-2">
+      <button type="button" onclick="exportSelectAll(true)" class="text-xs px-3 py-1 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded font-medium">全選</button>
+      <button type="button" onclick="exportSelectAll(false)" class="text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded font-medium">取消全選</button>
+     </div>
+     <div id="exportFieldList" class="grid grid-cols-2 gap-2 text-sm"></div>
+     <div class="flex gap-3 pt-2">
+      <button type="button" onclick="doExportExcel()" class="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-sm flex items-center justify-center gap-2"><i data-lucide="file-spreadsheet" class="w-4 h-4"></i>匯出 Excel</button>
+      <button type="button" onclick="closeExportModal()" class="px-6 py-2.5 border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium rounded-lg text-sm">取消</button>
+     </div>
+    </div>
+   </div>
+  </div>
+  `);
+  renderIcons();
+});
+  </script>
+</body>
+</html>
